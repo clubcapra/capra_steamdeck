@@ -1,0 +1,432 @@
+"""CLI entry point: pick a controller, pick a strategy, start streaming.
+
+Usage:
+    python -m control_interface --host 192.168.1.50 --port 5005 \
+        --device xbox --strategy tank
+"""
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+
+# Support both ``python -m control_interface`` (where __package__ is
+# set and relative imports work) and ``python control_interface/__main__.py``
+# (where Python treats this as a top-level script with no parent package).
+# In the latter case we manually put the package's parent on sys.path and
+# reassign __package__ so the absolute imports below resolve either way.
+if __package__ in (None, ""):
+    _here = os.path.dirname(os.path.abspath(__file__))
+    _parent = os.path.dirname(_here)
+    if _parent not in sys.path:
+        sys.path.insert(0, _parent)
+    __package__ = os.path.basename(_here)
+
+from control_interface.controllers import (
+    ControllerBase,
+    SteamDeckController,
+    XboxController,
+)
+from control_interface.network import (
+    BindEndpoint,
+    UdpEndpoint,
+    UdpSender,
+    UdpTelemetryReceiver,
+    UdpTorqueReceiver,
+)
+from control_interface.strategies import (
+    ArcadeArmStrategy,
+    ControlStrategy,
+    TankDriveStrategy,
+)
+from control_interface.ui_server import CsvLogger, TeleopHttpServer, TeleopState
+
+
+DEVICES = {
+    "xbox": XboxController,
+    "steamdeck": SteamDeckController,
+}
+
+STRATEGIES = {
+    "tank": TankDriveStrategy,
+    "arcade": ArcadeArmStrategy,
+}
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Rove control interface")
+    p.add_argument("--host", required=True, help="Rover IP or hostname")
+    p.add_argument("--port", type=int, required=True, help="Rover UDP port")
+    p.add_argument(
+        "--device",
+        choices=DEVICES.keys(),
+        default="xbox",
+        help="Controller backend (default: xbox)",
+    )
+    p.add_argument(
+        "--strategy",
+        choices=STRATEGIES.keys(),
+        default="tank",
+        help="Control strategy (default: tank)",
+    )
+    p.add_argument(
+        "--rate", type=float, default=50.0, help="Polling rate in Hz (default: 50)"
+    )
+    p.add_argument(
+        "--device-index",
+        type=int,
+        default=0,
+        help="Joystick index if multiple are connected",
+    )
+    p.add_argument(
+        "--no-haptics", action="store_true", help="Disable rumble feedback"
+    )
+    p.add_argument(
+        "--torque-listen-host",
+        default=None,
+        help=(
+            "Bind address for inbound torque feedback "
+            "(default: disabled; e.g. 0.0.0.0)"
+        ),
+    )
+    p.add_argument(
+        "--torque-listen-port",
+        type=int,
+        default=5006,
+        help="UDP port for inbound torque feedback (default: 5006)",
+    )
+    p.add_argument(
+        "--torque-max",
+        type=float,
+        default=50.0,
+        help="Torque (Nm) that maps to full-scale rumble (default: 50.0)",
+    )
+    p.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable debug logging",
+    )
+    p.add_argument(
+        "--print-frames",
+        action="store_true",
+        help="Print a one-line summary of each RoveControl frame as it's sent",
+    )
+    p.add_argument(
+        "--debug-input",
+        action="store_true",
+        help="Print the raw ControllerInput ~1x/sec (sticks, triggers, buttons)",
+    )
+    p.add_argument(
+        "--probe",
+        action="store_true",
+        help=(
+            "Log every raw button press/release and axis change with its "
+            "pygame index. Used to discover device-specific mappings."
+        ),
+    )
+    p.add_argument(
+        "--telemetry-listen-host",
+        default="0.0.0.0",
+        help="Bind address for inbound RoveTelemetry (default: 0.0.0.0).",
+    )
+    p.add_argument(
+        "--telemetry-listen-port",
+        type=int,
+        default=7001,
+        help="UDP port the rover pushes RoveTelemetry to (default: 7001).",
+    )
+    p.add_argument(
+        "--no-ui",
+        action="store_true",
+        help="Disable the local web UI / telemetry pipeline.",
+    )
+    p.add_argument(
+        "--ui-host",
+        default="127.0.0.1",
+        help="Bind address for the operator UI (default: 127.0.0.1).",
+    )
+    p.add_argument(
+        "--ui-port",
+        type=int,
+        default=8765,
+        help="HTTP port for the operator UI (default: 8765).",
+    )
+    p.add_argument(
+        "--log-dir",
+        type=Path,
+        default=Path("logs"),
+        help="Directory for sent/received CSV logs (default: ./logs).",
+    )
+    p.add_argument(
+        "--no-log",
+        action="store_true",
+        help="Don't write CSV logs.",
+    )
+    return p.parse_args(argv)
+
+
+def _format_frame(msg) -> str:
+    t = msg.tracks
+    o = msg.ovis
+    return (
+        f"t={msg.timestamp_us:>16}  "
+        f"tracks L={t.left_vel:+.2f} R={t.right_vel:+.2f}  "
+        f"flip fl/fr/rl/rr="
+        f"{msg.flippers.fl:+d}/{msg.flippers.fr:+d}/"
+        f"{msg.flippers.rl:+d}/{msg.flippers.rr:+d}  "
+        f"twist xyz=({o.position.x:+.2f},{o.position.y:+.2f},{o.position.z:+.2f}) "
+        f"ypr=({o.orientation.yaw:+.2f},{o.orientation.pitch:+.2f},{o.orientation.roll:+.2f})  "
+        f"grip={'O' if msg.gripper.open_state else 'C'}"
+    )
+
+
+def _attach_probe(controller: ControllerBase) -> None:
+    """Log every raw pygame button/hat/axis transition with its index.
+
+    Bypasses the phantom filter and index maps entirely so we can discover
+    what indices the kernel driver actually exposes (e.g. where Steam Deck
+    back grips land on hid-steam without Steam Input remapping).
+    """
+    original = controller._read_input
+    prev_buttons: dict[int, bool] = {}
+    prev_hat: list[tuple[int, int]] = [(0, 0)]
+    prev_axes: dict[int, float] = {}
+    printed_header = [False]
+
+    def read_and_probe():
+        inp = original()
+        joy = getattr(controller, "_joystick", None)
+        if joy is None:
+            return inp
+
+        if not printed_header[0]:
+            printed_header[0] = True
+            try:
+                print(
+                    f"[probe] device={joy.get_name()!r} "
+                    f"buttons={joy.get_numbuttons()} "
+                    f"axes={joy.get_numaxes()} "
+                    f"hats={joy.get_numhats()}",
+                    flush=True,
+                )
+            except Exception:
+                pass
+
+        try:
+            n_buttons = joy.get_numbuttons()
+        except Exception:
+            n_buttons = 0
+        for i in range(n_buttons):
+            try:
+                state = bool(joy.get_button(i))
+            except Exception:
+                continue
+            if state != prev_buttons.get(i, False):
+                print(f"[probe] button {i:2d}: {'DOWN' if state else 'UP'}", flush=True)
+                prev_buttons[i] = state
+
+        try:
+            n_hats = joy.get_numhats()
+        except Exception:
+            n_hats = 0
+        if n_hats > 0:
+            try:
+                hat = joy.get_hat(0)
+            except Exception:
+                hat = (0, 0)
+            if hat != prev_hat[0]:
+                print(f"[probe] hat 0: {hat}", flush=True)
+                prev_hat[0] = hat
+
+        try:
+            n_axes = joy.get_numaxes()
+        except Exception:
+            n_axes = 0
+        for i in range(n_axes):
+            try:
+                v = float(joy.get_axis(i))
+            except Exception:
+                continue
+            prev = prev_axes.get(i)
+            # Print first value seen + any change > 0.3 from the last
+            # reported value. Avoids drowning the log in drift.
+            if prev is None or abs(v - prev) > 0.3:
+                print(f"[probe] axis {i}: {v:+.2f}", flush=True)
+                prev_axes[i] = v
+
+        return inp
+
+    controller._read_input = read_and_probe
+
+
+def _tee_input(controller: ControllerBase) -> None:
+    """Wrap _read_input so the raw snapshot prints roughly once per second."""
+    original = controller._read_input
+    last_print = 0.0
+
+    def read_and_print():
+        nonlocal last_print
+        inp = original()
+        now = time.monotonic()
+        if inp is not None and (now - last_print) >= 1.0:
+            last_print = now
+            btns = sorted(b.name for b in inp.buttons) or ["-"]
+            print(
+                f"[input] L=({inp.left_x:+.2f},{inp.left_y:+.2f}) "
+                f"R=({inp.right_x:+.2f},{inp.right_y:+.2f}) "
+                f"LT={inp.left_trigger:.2f} RT={inp.right_trigger:.2f} "
+                f"buttons={','.join(btns)} idle={inp.is_idle()}",
+                flush=True,
+            )
+        return inp
+
+    controller._read_input = read_and_print
+
+
+def _tee_sender(sender: UdpSender) -> None:
+    """Wrap sender.send so every successful send also prints a frame summary."""
+    original_send = sender.send
+    frame_count = 0
+
+    def send_and_print(msg):
+        nonlocal frame_count
+        ok = original_send(msg)
+        if ok:
+            frame_count += 1
+            print(f"[#{frame_count:05d} -> {sender.endpoint.host}:{sender.endpoint.port}] "
+                  f"{_format_frame(msg)}", flush=True)
+        return ok
+
+    sender.send = send_and_print
+
+
+def _install_sender_observers(sender: UdpSender, observers) -> None:
+    """Wrap ``sender.send`` so every successfully-sent message is also
+    forwarded to each observer. Observers run after the wire send, so a
+    slow logger never throttles the control loop's send rate.
+    """
+    original_send = sender.send
+
+    def send_and_observe(msg):
+        ok = original_send(msg)
+        if ok:
+            for fn in observers:
+                try:
+                    fn(msg)
+                except Exception as e:
+                    logging.getLogger(__name__).debug(
+                        "send observer raised: %s", e
+                    )
+        return ok
+
+    sender.send = send_and_observe
+
+
+def build_controller(args: argparse.Namespace) -> ControllerBase:
+    endpoint = UdpEndpoint(host=args.host, port=args.port)
+    sender = UdpSender(endpoint)
+    if args.print_frames:
+        _tee_sender(sender)
+    strategy: ControlStrategy = STRATEGIES[args.strategy]()
+    device_cls = DEVICES[args.device]
+
+    torque_receiver: UdpTorqueReceiver | None = None
+    if args.torque_listen_host and not args.no_haptics:
+        torque_receiver = UdpTorqueReceiver(
+            endpoint=BindEndpoint(
+                host=args.torque_listen_host,
+                port=args.torque_listen_port,
+            ),
+            torque_max=args.torque_max,
+        )
+
+    controller = device_cls(
+        sender=sender,
+        strategy=strategy,
+        rate_hz=args.rate,
+        haptics_enabled=not args.no_haptics,
+        device_index=args.device_index,
+        torque_receiver=torque_receiver,
+    )
+    if args.debug_input:
+        _tee_input(controller)
+    if args.probe:
+        _attach_probe(controller)
+    return controller
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    controller = build_controller(args)
+
+    # --- Observability: telemetry receiver, UI server, CSV logger ------
+    state = TeleopState()
+    csv_logger: CsvLogger | None = None
+    if not args.no_log:
+        csv_logger = CsvLogger(args.log_dir)
+
+    receiver: UdpTelemetryReceiver | None = None
+    if not args.no_ui:
+        receiver = UdpTelemetryReceiver(
+            BindEndpoint(args.telemetry_listen_host, args.telemetry_listen_port)
+        )
+        receiver.subscribe(lambda t: None)  # placeholder; state is read on demand
+        if csv_logger is not None:
+            receiver.subscribe(csv_logger.log_recv)
+        receiver.start()
+
+    # Tee the strategy → wire path so every sent frame updates state + logs.
+    observers = [state.on_sent]
+    if csv_logger is not None:
+        observers.append(csv_logger.log_sent)
+    _install_sender_observers(controller._sender, observers)  # type: ignore[attr-defined]
+
+    ui_server: TeleopHttpServer | None = None
+    if not args.no_ui:
+        ui_server = TeleopHttpServer(state, receiver, host=args.ui_host, port=args.ui_port)
+        ui_server.start()
+
+    # Ctrl-C should exit the loop cleanly, not crash out mid-send.
+    def handle_sigint(signum, frame):  # noqa: ARG001
+        logging.info("SIGINT received, stopping...")
+        controller.stop()
+
+    signal.signal(signal.SIGINT, handle_sigint)
+    signal.signal(signal.SIGTERM, handle_sigint)
+
+    try:
+        controller.run()
+    except Exception:
+        logging.exception("Controller loop crashed")
+        return 1
+    finally:
+        if ui_server is not None:
+            try:
+                ui_server.stop()
+            except Exception:
+                pass
+        if receiver is not None:
+            try:
+                receiver.stop()
+            except Exception:
+                pass
+        if csv_logger is not None:
+            try:
+                csv_logger.close()
+            except Exception:
+                pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
