@@ -1,8 +1,12 @@
 """CLI entry point: pick a controller, pick a strategy, start streaming.
 
 Usage:
-    python -m control_interface --host 192.168.1.50 --port 5005 \
-        --device xbox --strategy tank
+    python3 -m capra_teleop_interface --host 192.168.1.50 --port 5005 \
+        --device steamdeck --strategy arcade
+
+Run from the *parent* of ``capra_teleop_interface/`` (so Python can find
+the package on sys.path). The ``__package__`` fixup below also lets
+``python3 capra_teleop_interface/__main__.py …`` work from there.
 """
 from __future__ import annotations
 
@@ -14,11 +18,12 @@ import sys
 import time
 from pathlib import Path
 
-# Support both ``python -m control_interface`` (where __package__ is
-# set and relative imports work) and ``python control_interface/__main__.py``
-# (where Python treats this as a top-level script with no parent package).
-# In the latter case we manually put the package's parent on sys.path and
-# reassign __package__ so the absolute imports below resolve either way.
+# Support both ``python3 -m capra_teleop_interface`` (where __package__
+# is set and relative imports work) and ``python3
+# capra_teleop_interface/__main__.py`` (where Python treats this as a
+# top-level script with no parent package). In the latter case we put
+# the package's parent on sys.path and reassign __package__ so the
+# relative imports below resolve either way.
 if __package__ in (None, ""):
     _here = os.path.dirname(os.path.abspath(__file__))
     _parent = os.path.dirname(_here)
@@ -26,24 +31,24 @@ if __package__ in (None, ""):
         sys.path.insert(0, _parent)
     __package__ = os.path.basename(_here)
 
-from control_interface.controllers import (
+from .controllers import (
     ControllerBase,
     SteamDeckController,
     XboxController,
 )
-from control_interface.network import (
+from .network import (
     BindEndpoint,
     UdpEndpoint,
     UdpSender,
     UdpTelemetryReceiver,
     UdpTorqueReceiver,
 )
-from control_interface.strategies import (
+from .strategies import (
     ArcadeArmStrategy,
     ControlStrategy,
     TankDriveStrategy,
 )
-from control_interface.ui_server import CsvLogger, TeleopHttpServer, TeleopState
+from .ui_server import CsvLogger, TeleopHttpServer, TeleopState
 
 
 DEVICES = {
