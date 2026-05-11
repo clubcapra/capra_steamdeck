@@ -48,7 +48,7 @@ from .strategies import (
     ControlStrategy,
     TankDriveStrategy,
 )
-from .ui_server import CsvLogger, TeleopHttpServer, TeleopState
+from .ui_server import CsvLogger, TeleopHttpServer, TeleopState, zero_rove_control
 
 
 DEVICES = {
@@ -171,6 +171,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--no-log",
         action="store_true",
         help="Don't write CSV logs.",
+    )
+    p.add_argument(
+        "--api-base-url",
+        default="http://192.168.2.2:8080",
+        help=(
+            "rove_sensor_api base URL used by the UI E-stop button "
+            "(default: http://192.168.2.2:8080). Set to '' to disable the "
+            "direct api call (zeroed outbound commands still happen)."
+        ),
     )
     return p.parse_args(argv)
 
@@ -310,26 +319,33 @@ def _tee_sender(sender: UdpSender) -> None:
     sender.send = send_and_print
 
 
-def _install_sender_observers(sender: UdpSender, observers) -> None:
-    """Wrap ``sender.send`` so every successfully-sent message is also
-    forwarded to each observer. Observers run after the wire send, so a
-    slow logger never throttles the control loop's send rate.
+def _install_sender_hooks(sender: UdpSender, pre_send_filters, observers) -> None:
+    """Wrap ``sender.send`` with pre-send filters and post-send observers.
+
+    Filters mutate the outgoing message before the wire write (used by the
+    E-stop to zero outbound commands while keeping the heartbeat going).
+    Observers run after a successful send so a slow logger never throttles
+    the control loop's send rate.
     """
     original_send = sender.send
+    _log = logging.getLogger(__name__)
 
-    def send_and_observe(msg):
+    def send_filtered_and_observed(msg):
+        for fn in pre_send_filters:
+            try:
+                fn(msg)
+            except Exception as e:
+                _log.debug("pre-send filter raised: %s", e)
         ok = original_send(msg)
         if ok:
             for fn in observers:
                 try:
                     fn(msg)
                 except Exception as e:
-                    logging.getLogger(__name__).debug(
-                        "send observer raised: %s", e
-                    )
+                    _log.debug("send observer raised: %s", e)
         return ok
 
-    sender.send = send_and_observe
+    sender.send = send_filtered_and_observed
 
 
 def build_controller(args: argparse.Namespace) -> ControllerBase:
@@ -391,14 +407,24 @@ def main(argv: list[str] | None = None) -> int:
         receiver.start()
 
     # Tee the strategy → wire path so every sent frame updates state + logs.
+    # The pre-send filter is what makes the E-stop button cut motion: it
+    # mutates the outgoing message to all zeros whenever state.is_estopped()
+    # is set, while still letting the heartbeat reach the rover.
+    pre_send = [lambda msg, _s=state: zero_rove_control(msg) if _s.is_estopped() else None]
     observers = [state.on_sent]
     if csv_logger is not None:
         observers.append(csv_logger.log_sent)
-    _install_sender_observers(controller._sender, observers)  # type: ignore[attr-defined]
+    _install_sender_hooks(controller._sender, pre_send, observers)  # type: ignore[attr-defined]
 
     ui_server: TeleopHttpServer | None = None
     if not args.no_ui:
-        ui_server = TeleopHttpServer(state, receiver, host=args.ui_host, port=args.ui_port)
+        ui_server = TeleopHttpServer(
+            state,
+            receiver,
+            host=args.ui_host,
+            port=args.ui_port,
+            api_base_url=args.api_base_url,
+        )
         ui_server.start()
 
     # Ctrl-C should exit the loop cleanly, not crash out mid-send.

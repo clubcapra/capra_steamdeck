@@ -1,9 +1,12 @@
 """Tiny stdlib HTTP server exposing teleop state for the operator UI.
 
-Two endpoints:
-    GET /          → static HTML/JS that polls /state every 250 ms
-    GET /state     → JSON snapshot of the most recent sent RoveControl
-                     and received RoveTelemetry, plus packet counters.
+Endpoints:
+    GET  /          → static HTML/JS dashboard
+    GET  /state     → JSON snapshot of the most recent sent RoveControl
+                      and received RoveTelemetry, plus packet counters.
+    POST /estop     → engage emergency stop: zeroes outbound commands and
+                      asks the sensor api to erase queued trajectories.
+    POST /resume    → clear the emergency stop flag.
 
 Also writes every sent/received frame to a per-session CSV log so a
 runaway control session can be replayed offline.
@@ -15,6 +18,8 @@ import json
 import logging
 import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -46,7 +51,34 @@ _INDEX_HTML = """<!doctype html>
  .joint { background:#101418; padding:.4em; border-radius:4px; text-align:center; }
  .joint .n { color:#7fd1ff; font-size:.8em; }
  .joint .v { font-variant-numeric: tabular-nums; }
+ .estop {
+   margin-top:1em; padding:1em; background:#1a1f25; border:1px solid #29303a;
+   border-radius:6px; text-align:center;
+ }
+ .estop-btn {
+   width:100%; padding:1.4em; font-size:2em; font-weight:900; letter-spacing:.18em;
+   border:3px solid #5a1010; border-radius:8px; background:#b81818; color:#fff;
+   cursor:pointer; transition: background .08s, transform .04s;
+   text-shadow: 0 1px 0 #000;
+ }
+ .estop-btn:hover { background:#d62020; }
+ .estop-btn:active { transform: translateY(1px); }
+ .estop-btn:disabled { background:#454e58; border-color:#2a2f36; color:#9aa6b3; cursor:default; }
+ .resume-btn {
+   margin-top:.6em; padding:.7em 1.3em; font-size:1em; font-weight:700;
+   border:1px solid #2a2f36; background:#1f3a26; color:#cfeed3;
+   border-radius:6px; cursor:pointer;
+ }
+ .resume-btn:hover { background:#296b3a; color:#fff; }
+ .estop-status { margin-top:.6em; font-size:.95em; }
+ .banner-estop {
+   position:sticky; top:0; margin: 0 -1em .8em -1em; padding:.6em 1em;
+   background:#b81818; color:#fff; font-weight:bold; text-align:center;
+   border-bottom:2px solid #5a1010; letter-spacing:.08em;
+ }
+ .hidden { display:none; }
 </style></head><body>
+<div id="estop_banner" class="banner-estop hidden">⛔ E-STOP ENGAGED — outbound commands zeroed</div>
 <h1>capra teleop — <span id="status">connecting…</span></h1>
 <div class="grid">
   <div class="card">
@@ -66,6 +98,11 @@ _INDEX_HTML = """<!doctype html>
     <div class="row small" style="margin-top:.5em;"><span>received #</span><span id="rx_count">0</span></div>
   </div>
 </div>
+<div class="estop">
+  <button id="estop_btn" class="estop-btn" onclick="trigger_estop()">E-STOP</button>
+  <button id="resume_btn" class="resume-btn hidden" onclick="trigger_resume()">RESUME</button>
+  <div id="estop_status" class="estop-status small">click to halt all outbound commands</div>
+</div>
 <script>
 async function tick() {
   try {
@@ -73,6 +110,7 @@ async function tick() {
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
     document.getElementById('status').innerHTML = '<span class="good">live</span>';
+    apply_estop(j.estopped);
     if (j.sent) {
       const s = j.sent;
       document.getElementById('tracks').textContent = `${fmt(s.tracks_left)} / ${fmt(s.tracks_right)}`;
@@ -102,7 +140,51 @@ async function tick() {
     document.getElementById('status').innerHTML = '<span class="bad">offline (' + e + ')</span>';
   }
 }
+function apply_estop(is_estopped) {
+  const banner = document.getElementById('estop_banner');
+  const btn = document.getElementById('estop_btn');
+  const resume = document.getElementById('resume_btn');
+  const stat = document.getElementById('estop_status');
+  if (is_estopped) {
+    banner.classList.remove('hidden');
+    btn.disabled = true;
+    btn.textContent = 'STOPPED';
+    resume.classList.remove('hidden');
+    stat.textContent = 'outbound zeroed · sensor api asked to erase trajectories';
+  } else {
+    banner.classList.add('hidden');
+    btn.disabled = false;
+    btn.textContent = 'E-STOP';
+    resume.classList.add('hidden');
+    stat.textContent = 'click to halt all outbound commands';
+  }
+}
+async function trigger_estop() {
+  try {
+    const r = await fetch('/estop', {method: 'POST'});
+    const j = await r.json();
+    apply_estop(true);
+    document.getElementById('estop_status').textContent = j.api_status || 'engaged';
+  } catch (e) {
+    document.getElementById('estop_status').textContent = 'estop POST failed: ' + e;
+  }
+}
+async function trigger_resume() {
+  try {
+    await fetch('/resume', {method: 'POST'});
+    apply_estop(false);
+  } catch (e) {
+    document.getElementById('estop_status').textContent = 'resume POST failed: ' + e;
+  }
+}
 function fmt(v) { return (v == null) ? '—' : (+v).toFixed(2); }
+// Space-bar also triggers E-STOP for quick muscle memory.
+document.addEventListener('keydown', (e) => {
+  if (e.key === ' ' || e.code === 'Space') {
+    e.preventDefault();
+    trigger_estop();
+  }
+});
 setInterval(tick, 250);
 tick();
 </script></body></html>
@@ -116,6 +198,7 @@ class TeleopState:
         self._lock = threading.Lock()
         self._sent: Optional[dict] = None
         self._sent_count = 0
+        self._estopped = False
 
     def on_sent(self, msg) -> None:
         snap = {
@@ -142,10 +225,19 @@ class TeleopState:
             self._sent = snap
             self._sent_count += 1
 
+    def set_estop(self, value: bool) -> None:
+        with self._lock:
+            self._estopped = bool(value)
+
+    def is_estopped(self) -> bool:
+        with self._lock:
+            return self._estopped
+
     def snapshot(self, receiver: Optional[UdpTelemetryReceiver]) -> dict:
         with self._lock:
             sent = dict(self._sent) if self._sent is not None else None
             sent_count = self._sent_count
+            estopped = self._estopped
         telemetry = None
         rx_count = 0
         if receiver is not None:
@@ -173,7 +265,66 @@ class TeleopState:
             "sent_count": sent_count,
             "telemetry": telemetry,
             "rx_count": rx_count,
+            "estopped": estopped,
         }
+
+
+def zero_rove_control(msg) -> None:
+    """Mutate a RoveControl message in place to a no-op frame.
+
+    Used by the E-stop path: we want to keep the heartbeat going so the
+    rover never thinks the operator is gone, but every commanded motion
+    has to be zero.
+    """
+    msg.tracks.left_vel = 0.0
+    msg.tracks.right_vel = 0.0
+    msg.flippers.fl = 0
+    msg.flippers.fr = 0
+    msg.flippers.rl = 0
+    msg.flippers.rr = 0
+    msg.ovis.position.x = 0.0
+    msg.ovis.position.y = 0.0
+    msg.ovis.position.z = 0.0
+    msg.ovis.orientation.yaw = 0.0
+    msg.ovis.orientation.pitch = 0.0
+    msg.ovis.orientation.roll = 0.0
+    # gripper.open_state is latched state, not a velocity — leave it.
+
+
+def post_estop_to_api(api_base_url: str) -> str:
+    """Tell the sensor api to halt the arm directly.
+
+    We don't rely on the rover-side wrapper for this: the wrapper's
+    velocity stream will already go to zero (the strategy is zeroed
+    upstream), but erasing queued trajectories is the only way to drop
+    motion that's already been latched into the firmware. Best effort —
+    a failed POST is logged but doesn't gate the local zeroing.
+    """
+    if not api_base_url:
+        return "no api_base_url configured"
+    url = api_base_url.rstrip("/") + "/kinova_arm/command"
+    body = {
+        "erase_trajectories": True,
+        "joint_1_vel": 0.0,
+        "joint_2_vel": 0.0,
+        "joint_3_vel": 0.0,
+        "joint_4_vel": 0.0,
+        "joint_5_vel": 0.0,
+        "joint_6_vel": 0.0,
+    }
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=data, headers={"Content-Type": "application/json"}, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            return f"api POST {resp.status}"
+    except urllib.error.URLError as e:
+        log.warning("E-stop api POST failed: %s", e)
+        return f"api POST failed: {e.reason if hasattr(e, 'reason') else e}"
+    except Exception as e:  # pragma: no cover
+        log.warning("E-stop api POST raised: %s", e)
+        return f"api POST raised: {e}"
 
 
 class TeleopHttpServer:
@@ -185,17 +336,29 @@ class TeleopHttpServer:
         receiver: Optional[UdpTelemetryReceiver],
         host: str = "127.0.0.1",
         port: int = 8765,
+        api_base_url: str = "",
     ) -> None:
         self._state = state
         self._receiver = receiver
         self._host = host
         self._port = port
+        self._api_base_url = api_base_url
         self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
         state = self._state
         receiver = self._receiver
+        api_base_url = self._api_base_url
+
+        def _json_response(handler, body: dict, status: int = 200) -> None:
+            payload = json.dumps(body).encode("utf-8")
+            handler.send_response(status)
+            handler.send_header("Content-Type", "application/json")
+            handler.send_header("Cache-Control", "no-store")
+            handler.send_header("Content-Length", str(len(payload)))
+            handler.end_headers()
+            handler.wfile.write(payload)
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *_args, **_kw):
@@ -211,13 +374,24 @@ class TeleopHttpServer:
                     self.end_headers()
                     self.wfile.write(body)
                 elif self.path == "/state":
-                    body = json.dumps(state.snapshot(receiver)).encode("utf-8")
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Cache-Control", "no-store")
-                    self.send_header("Content-Length", str(len(body)))
+                    _json_response(self, state.snapshot(receiver))
+                else:
+                    self.send_response(404)
                     self.end_headers()
-                    self.wfile.write(body)
+
+            def do_POST(self):
+                if self.path == "/estop":
+                    state.set_estop(True)
+                    api_status = post_estop_to_api(api_base_url)
+                    log.warning("E-STOP engaged via UI (%s)", api_status)
+                    _json_response(
+                        self,
+                        {"estopped": True, "api_status": api_status},
+                    )
+                elif self.path == "/resume":
+                    state.set_estop(False)
+                    log.warning("E-STOP cleared via UI")
+                    _json_response(self, {"estopped": False})
                 else:
                     self.send_response(404)
                     self.end_headers()
