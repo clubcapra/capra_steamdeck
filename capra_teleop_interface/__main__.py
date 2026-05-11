@@ -117,9 +117,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Enable debug logging",
     )
     p.add_argument(
-        "--print-frames",
+        "--no-print-frames",
         action="store_true",
-        help="Print a one-line summary of each RoveControl frame as it's sent",
+        help="Silence the live per-frame stdout log of outgoing RoveControl.",
+    )
+    p.add_argument(
+        "--verbose-frames",
+        action="store_true",
+        help=(
+            "Print every outgoing RoveControl frame (firehose, 50 Hz). "
+            "By default only frames that change a value or pass the 2 s "
+            "heartbeat window are printed."
+        ),
     )
     p.add_argument(
         "--debug-input",
@@ -302,18 +311,69 @@ def _tee_input(controller: ControllerBase) -> None:
     controller._read_input = read_and_print
 
 
-def _tee_sender(sender: UdpSender) -> None:
-    """Wrap sender.send so every successful send also prints a frame summary."""
+_FRAME_LOG_EPSILON = 0.02
+_FRAME_LOG_HEARTBEAT_S = 2.0
+
+
+def _snapshot_msg(msg) -> tuple:
+    """Tuple of every field we render — used to detect change cheaply."""
+    return (
+        round(msg.tracks.left_vel, 3), round(msg.tracks.right_vel, 3),
+        msg.flippers.fl, msg.flippers.fr, msg.flippers.rl, msg.flippers.rr,
+        round(msg.ovis.position.x, 3), round(msg.ovis.position.y, 3),
+        round(msg.ovis.position.z, 3),
+        round(msg.ovis.orientation.yaw, 3),
+        round(msg.ovis.orientation.pitch, 3),
+        round(msg.ovis.orientation.roll, 3),
+        bool(msg.gripper.open_state),
+    )
+
+
+def _snapshot_changed(prev: tuple, curr: tuple) -> bool:
+    """True if any field moved more than the epsilon (floats) or differs
+    at all (ints / bool). Discrete fields use straight inequality."""
+    # 0,1 = tracks; 2..5 = flippers; 6..11 = ovis; 12 = gripper.
+    for i in (0, 1, 6, 7, 8, 9, 10, 11):
+        if abs(curr[i] - prev[i]) > _FRAME_LOG_EPSILON:
+            return True
+    for i in (2, 3, 4, 5, 12):
+        if curr[i] != prev[i]:
+            return True
+    return False
+
+
+def _tee_sender(sender: UdpSender, verbose: bool = False) -> None:
+    """Wrap sender.send so the operator sees the outgoing proto live.
+
+    ``verbose`` prints every packet (firehose, 50 Hz). The default mode
+    only logs when a real change crosses the epsilon, plus a heartbeat
+    line every ~2 s so silence isn't ambiguous.
+    """
     original_send = sender.send
-    frame_count = 0
+    state = {"count": 0, "last_snap": None, "last_print": 0.0}
+    endpoint = sender.endpoint
 
     def send_and_print(msg):
-        nonlocal frame_count
         ok = original_send(msg)
         if ok:
-            frame_count += 1
-            print(f"[#{frame_count:05d} -> {sender.endpoint.host}:{sender.endpoint.port}] "
-                  f"{_format_frame(msg)}", flush=True)
+            state["count"] += 1
+            snap = _snapshot_msg(msg)
+            now = time.monotonic()
+            should_print = verbose
+            if not should_print:
+                prev = state["last_snap"]
+                if prev is None or _snapshot_changed(prev, snap):
+                    should_print = True
+                elif (now - state["last_print"]) >= _FRAME_LOG_HEARTBEAT_S:
+                    should_print = True
+            if should_print:
+                print(
+                    f"[#{state['count']:05d} -> {endpoint.host}:{endpoint.port}] "
+                    f"{_format_frame(msg)}",
+                    flush=True,
+                )
+                state["last_snap"] = snap
+                state["last_print"] = now
         return ok
 
     sender.send = send_and_print
@@ -351,8 +411,8 @@ def _install_sender_hooks(sender: UdpSender, pre_send_filters, observers) -> Non
 def build_controller(args: argparse.Namespace) -> ControllerBase:
     endpoint = UdpEndpoint(host=args.host, port=args.port)
     sender = UdpSender(endpoint)
-    if args.print_frames:
-        _tee_sender(sender)
+    if not args.no_print_frames:
+        _tee_sender(sender, verbose=args.verbose_frames)
     strategy: ControlStrategy = STRATEGIES[args.strategy]()
     device_cls = DEVICES[args.device]
 
