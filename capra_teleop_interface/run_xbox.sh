@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Xbox controller launcher: tank drive, self-bootstrapping venv.
+# Xbox controller launcher: base control (arcade + flippers), self-bootstrapping venv.
 #
 # Usage:
 #   ./run_xbox.sh                           # uses defaults
@@ -48,7 +48,7 @@ exec python -m control_interface \
     --host "$HOST" \
     --port "$PORT" \
     --device xbox \
-    --strategy tank \
+    --strategy base_control \
     --print-frames \
     --debug-input \
     "$@"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Steam Deck launcher: tank drive, self-bootstrapping venv.
+# Steam Deck launcher: base control (arcade + flippers), self-bootstrapping venv.
 #
 # Usage:
 #   ./run_steamdeck.sh                           # uses defaults
@@ -51,6 +51,6 @@ exec python -m control_interface \
     --host "$HOST" \
     --port "$PORT" \
     --device steamdeck \
-    --strategy tank \
+    --strategy base_control \
     --print-frames \
     "$@"

@@ -44,9 +44,9 @@ from .network import (
     UdpTorqueReceiver,
 )
 from .strategies import (
-    ArcadeArmStrategy,
+    ArmControlStrategy,
+    BaseControlStrategy,
     ControlStrategy,
-    TankDriveStrategy,
 )
 from .ui_server import CsvLogger, TeleopHttpServer, TeleopState, zero_rove_control
 
@@ -57,8 +57,8 @@ DEVICES = {
 }
 
 STRATEGIES = {
-    "tank": TankDriveStrategy,
-    "arcade": ArcadeArmStrategy,
+    "base_control": BaseControlStrategy,
+    "arm_control": ArmControlStrategy,
 }
 
 
@@ -75,8 +75,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--strategy",
         choices=STRATEGIES.keys(),
-        default="tank",
-        help="Control strategy (default: tank)",
+        default="base_control",
+        help="Initial control strategy (default: base_control). Can be switched live via the UI.",
     )
     p.add_argument(
         "--rate", type=float, default=50.0, help="Polling rate in Hz (default: 50)"
@@ -452,6 +452,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- Observability: telemetry receiver, UI server, CSV logger ------
     state = TeleopState()
+    state.set_strategy_name(args.strategy)
     csv_logger: CsvLogger | None = None
     if not args.no_log:
         csv_logger = CsvLogger(args.log_dir)
@@ -476,6 +477,12 @@ def main(argv: list[str] | None = None) -> int:
         observers.append(csv_logger.log_sent)
     _install_sender_hooks(controller._sender, pre_send, observers)  # type: ignore[attr-defined]
 
+    def _switch_strategy(name: str) -> None:
+        if name not in STRATEGIES:
+            raise ValueError(f"Unknown strategy: {name!r}")
+        controller.set_strategy(STRATEGIES[name]())
+        state.set_strategy_name(name)
+
     ui_server: TeleopHttpServer | None = None
     if not args.no_ui:
         ui_server = TeleopHttpServer(
@@ -484,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
             host=args.ui_host,
             port=args.ui_port,
             api_base_url=args.api_base_url,
+            strategy_switcher=_switch_strategy,
         )
         ui_server.start()
 

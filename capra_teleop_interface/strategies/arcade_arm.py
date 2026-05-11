@@ -1,20 +1,15 @@
-"""Arcade drive + Ovis-as-Twist strategy.
-
-Sticks and triggers drive the rover; the Ovis arm is commanded as a 6-DOF
-Cartesian twist (normalized scalars in [-1, 1]) that the on-rover IK
-engine resolves into joint velocities. We don't track per-actuator state
-here — the IK loop owns that.
+"""Arm control strategy: 6-DOF Ovis arm as Cartesian twist.
 
 Layout:
-    Left stick:   Y forward/back, X steer  → tracks
-    Right stick:  X = Ovis +x, -Y = Ovis +y → arm linear xy
-    Left trigger:  Ovis +z (arm up)
-    Right trigger: Ovis −z (arm down)
-    Bumpers:      LB / RB                  → Ovis yaw (-/+)
-    Face A/B:     pitch +/-
-    Face X/Y:     roll  +/-
-    DPAD:         flipper directional steps (front, rear pairs)
-    Back grip 5:  toggle gripper open/closed (Steam Deck; A on Xbox)
+    Right stick X / Y:   arm position X / Y  (Y inverted: up = +Y)
+    Left trigger:        arm position Z+  (up)
+    Right trigger:       arm position Z−  (down)
+    Left stick X:        arm orientation yaw  (twist left/right)
+    Left stick Y:        arm orientation pitch  (up = +pitch)
+    DPAD left / right:   arm orientation roll
+    Back grip R5:        toggle gripper open / closed
+
+Tracks are zeroed — arm mode does not drive the rover.
 """
 from __future__ import annotations
 
@@ -24,25 +19,15 @@ from ..controllers.input_model import Button, ControllerInput, HapticCommand
 from ..proto.core import RoveControl_pb2
 from .base import ControlStrategy
 
-# Inputs below this magnitude are treated as zero (drift / noise).
 STICK_DEADZONE = 0.08
-# Exponent for the expo curve on Ovis axes. >1 = more travel before the
-# command grows fast; the curve is x = sign(x) * |x|^EXPO. 2.0 = squared,
-# very gentle near zero; 1.0 = linear (off).
+# Expo exponent: >1 = flat near centre for fine control.
 OVIS_EXPO = 2.5
-# Maximum normalised output for the Ovis axes (≤ 1). Drops "full stick"
-# from saturating the engine's velocity envelope so fine control stays
-# possible. Tracks/flippers/yaw etc. are unaffected.
+# Full-stick output cap — avoids saturating the IK velocity envelope.
 OVIS_AXIS_LIMIT = 0.6
 
 
 def _scaled_dz(value: float, dz: float = STICK_DEADZONE) -> float:
-    """Deadzone with re-scaling so the output starts at exactly 0 when the
-    stick clears the deadzone, then grows smoothly to ±1. Without the
-    re-scaling, |output| jumps from 0 → dz at the threshold and turns the
-    stick into a step input — which is what the operator was feeling as
-    "all or nothing in millimetres".
-    """
+    """Deadzone with output rescaled to [0, 1] past the threshold."""
     a = abs(value)
     if a < dz:
         return 0.0
@@ -51,9 +36,6 @@ def _scaled_dz(value: float, dz: float = STICK_DEADZONE) -> float:
 
 
 def _expo(value: float, exponent: float = OVIS_EXPO) -> float:
-    """Sign-preserving power curve. ``exponent`` of 1 is linear; >1 yields
-    a flatter response near zero (precise fine control) and the same end
-    point at full deflection."""
     if value == 0.0:
         return 0.0
     sign = 1.0 if value >= 0 else -1.0
@@ -61,21 +43,15 @@ def _expo(value: float, exponent: float = OVIS_EXPO) -> float:
 
 
 def _ovis_axis(raw: float) -> float:
-    """Shape a stick / trigger reading into an Ovis twist component."""
     return _clamp(_expo(_scaled_dz(raw)) * OVIS_AXIS_LIMIT)
-
-
-def _dz(value: float, dz: float = STICK_DEADZONE) -> float:
-    """Hard deadzone used by the locomotion side (tracks, flippers)."""
-    return 0.0 if abs(value) < dz else value
 
 
 def _clamp(v: float) -> float:
     return max(-1.0, min(1.0, v))
 
 
-class ArcadeArmStrategy(ControlStrategy):
-    name = "arcade_arm"
+class ArmControlStrategy(ControlStrategy):
+    name = "arm_control"
 
     def __init__(self) -> None:
         self._last_update: float | None = None
@@ -92,44 +68,25 @@ class ArcadeArmStrategy(ControlStrategy):
         msg = RoveControl_pb2.RoveControl()
         msg.timestamp_us = int(now * 1_000_000)
 
-        # --- Arcade tracks ---
-        throttle = -_dz(inp.left_y)
-        steer = _dz(inp.left_x)
-        msg.tracks.left_vel = _clamp(throttle + steer)
-        msg.tracks.right_vel = _clamp(throttle - steer)
+        # Tracks zeroed — arm mode only.
+        msg.tracks.left_vel = 0.0
+        msg.tracks.right_vel = 0.0
 
-        # --- Flippers: D-pad (front pair / rear pair) ---
-        front_dir = (
-            (1 if inp.is_pressed(Button.DPAD_UP) else 0)
-            - (1 if inp.is_pressed(Button.DPAD_DOWN) else 0)
-        )
-        rear_dir = (
-            (1 if inp.is_pressed(Button.DPAD_RIGHT) else 0)
-            - (1 if inp.is_pressed(Button.DPAD_LEFT) else 0)
-        )
-        msg.flippers.fl = front_dir
-        msg.flippers.fr = front_dir
-        msg.flippers.rl = rear_dir
-        msg.flippers.rr = rear_dir
-
-        # --- Ovis twist (normalised, scaled deadzone + expo curve) ---
-        # Sticks/triggers feed the linear axes through `_ovis_axis`, which
-        # gives a smooth zero-out near rest and a flatter response near
-        # centre so operators can dial in millimetre-scale motion. Buttons
-        # stay binary but are knocked down to OVIS_AXIS_LIMIT so a button
-        # press doesn't immediately saturate the velocity envelope.
+        # Arm position: right stick XY (Y inverted), triggers for Z.
         msg.ovis.position.x = _ovis_axis(inp.right_x)
         msg.ovis.position.y = _ovis_axis(-inp.right_y)
-        # LT = up (+z), RT = down (−z).
         msg.ovis.position.z = _ovis_axis(inp.left_trigger - inp.right_trigger)
-        yaw = (1.0 if inp.is_pressed(Button.RB) else 0.0) - (1.0 if inp.is_pressed(Button.LB) else 0.0)
-        pitch = (1.0 if inp.is_pressed(Button.A) else 0.0) - (1.0 if inp.is_pressed(Button.B) else 0.0)
-        roll = (1.0 if inp.is_pressed(Button.Y) else 0.0) - (1.0 if inp.is_pressed(Button.X) else 0.0)
-        msg.ovis.orientation.yaw = yaw * OVIS_AXIS_LIMIT
-        msg.ovis.orientation.pitch = pitch * OVIS_AXIS_LIMIT
+
+        # Arm orientation: left stick X=yaw, Y=pitch (inverted); DPAD=roll.
+        msg.ovis.orientation.yaw = _ovis_axis(inp.left_x)
+        msg.ovis.orientation.pitch = _ovis_axis(-inp.left_y)
+        roll = (
+            (1.0 if inp.is_pressed(Button.DPAD_RIGHT) else 0.0)
+            - (1.0 if inp.is_pressed(Button.DPAD_LEFT) else 0.0)
+        )
         msg.ovis.orientation.roll = roll * OVIS_AXIS_LIMIT
 
-        # --- Gripper: edge-trigger on R5 (back grip) so each click toggles.
+        # Gripper: edge-triggered toggle on R5 back grip.
         gripper_btn = inp.is_pressed(Button.R5) or inp.is_pressed(Button.START)
         if gripper_btn and not self._gripper_btn_was_pressed:
             self._gripper_open = not self._gripper_open
@@ -141,7 +98,6 @@ class ArcadeArmStrategy(ControlStrategy):
     def compute_haptics(
         self, inp: ControllerInput, message: RoveControl_pb2.RoveControl
     ) -> HapticCommand | None:
-        track_speed = max(abs(message.tracks.left_vel), abs(message.tracks.right_vel))
         arm_active = (
             abs(message.ovis.position.x) > 0.05
             or abs(message.ovis.position.y) > 0.05
@@ -150,10 +106,14 @@ class ArcadeArmStrategy(ControlStrategy):
             or abs(message.ovis.orientation.pitch) > 0.05
             or abs(message.ovis.orientation.roll) > 0.05
         )
-        if track_speed < 0.1 and not arm_active:
+        if not arm_active:
             return None
         return HapticCommand(
-            low_frequency=track_speed * 0.35,
-            high_frequency=0.15 if arm_active else 0.0,
+            low_frequency=0.0,
+            high_frequency=0.15,
             duration_ms=80,
         )
+
+
+# Alias for callers still using the old class name.
+ArcadeArmStrategy = ArmControlStrategy
