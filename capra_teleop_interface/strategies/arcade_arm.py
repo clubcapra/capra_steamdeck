@@ -5,8 +5,8 @@ Layout:
     Left stick X:        arm orientation yaw  (twist left/right)
     Left stick Y:        arm orientation pitch  (up = +pitch)
     DPAD left / right:   arm orientation roll
-    Right trigger:       gripper close  (0 = fully open, 255 = fully closed)
-    Left trigger:        gripper open   (subtracts from right trigger)
+    Right trigger:       gripper close  (binary: 0 or 255)
+    Left trigger:        gripper open   (overrides right trigger if held harder)
 
 Tracks are zeroed — arm mode does not drive the rover.
 """
@@ -83,9 +83,8 @@ class ArmControlStrategy(ControlStrategy):
         )
         msg.ovis.orientation.roll = roll * OVIS_AXIS_LIMIT
 
-        # Gripper: right trigger = close, left trigger = open; net clamped 0-255.
-        grip_raw = int((inp.right_trigger - inp.left_trigger) * 255)
-        msg.gripper.position = max(0, min(255, grip_raw))
+        # Gripper: binary open/close — right trigger closes, left trigger opens.
+        msg.gripper.position = 255 if inp.right_trigger > inp.left_trigger else 0
 
         return msg
 
