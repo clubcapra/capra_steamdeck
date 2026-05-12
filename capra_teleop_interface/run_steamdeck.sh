@@ -50,7 +50,8 @@ fi
 export SDL_GAMECONTROLLERCONFIG_FILE="$DB_FILE"
 
 # Kill any stale instance so the UI port is free before we bind.
-pkill -f "capra_teleop_interface" 2>/dev/null || true
+# Pattern scoped to the Python process — avoids matching this bash script's own path.
+pkill -f "python3.*capra_teleop_interface" 2>/dev/null || true
 sleep 0.3
 
 cd "$PARENT_DIR"
