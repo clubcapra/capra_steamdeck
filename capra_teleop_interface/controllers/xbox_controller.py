@@ -210,11 +210,9 @@ class XboxController(ControllerBase):
         return self._axis(idx) - self._axis_rest.get(idx, 0.0)
 
     def _cal_trigger(self, idx: int) -> float:
-        # Produce 0 at rest, 1 at fully pulled, regardless of whether the
-        # driver rests the axis at -1 (mapped SDL gamepad) or 0 (raw).
-        rest = self._axis_rest.get(idx, -1.0)
-        span = 1.0 - rest
-        if span <= 0.01:
-            return 0.0
-        value = max(0.0, min(1.0, (self._axis(idx) - rest) / span))
+        # Produce 0 at rest, 1 at fully pulled.
+        # abs() handles both positive (SDL GameController normalization) and
+        # negative (Steam Deck raw joystick, ABS_HAT2 channels) polarities.
+        rest = self._axis_rest.get(idx, 0.0)
+        value = min(1.0, abs(self._axis(idx) - rest))
         return 0.0 if value < _TRIGGER_DEADZONE else value
