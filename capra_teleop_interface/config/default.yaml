@@ -11,6 +11,8 @@ device: "steamdeck"       # steamdeck | xbox
 strategy: "base_control"  # base_control | arm_control
 rate: 50.0                # Hz — control loop polling rate
 device_index: 0           # joystick index when multiple pads are connected
+stick_deadzone: 0.05      # raise (e.g. 0.12) if robot drifts at rest; lower for more precision
+trigger_deadzone: 0.02
 
 # ---------- Haptics ----------
 # no_haptics: false       # uncomment to disable rumble

@@ -53,6 +53,8 @@ class ControllerBase(ABC):
         rate_hz: float = 50.0,
         haptics_enabled: bool = True,
         torque_receiver: Optional[UdpTorqueReceiver] = None,
+        stick_deadzone: float = 0.05,
+        trigger_deadzone: float = 0.02,
     ) -> None:
         self._sender = sender
         self._strategy = strategy
@@ -62,6 +64,8 @@ class ControllerBase(ABC):
         self._haptic: HapticFeedback = NullHaptic()
         self._torque_receiver = torque_receiver
         self._stop = False
+        self._stick_deadzone = stick_deadzone
+        self._trigger_deadzone = trigger_deadzone
 
     # ---- Template method ----------------------------------------------------
 
@@ -103,7 +107,7 @@ class ControllerBase(ABC):
                 # Push-based control: the robot stops when packets stop
                 # arriving, so suppress frames where nothing is commanded
                 # rather than spam empty telemetry.
-                if not inp.is_idle():
+                if not inp.is_idle(self._stick_deadzone, self._trigger_deadzone):
                     self._sender.send(msg)
 
                 # Haptics always tick — torque feedback is about what the

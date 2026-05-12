@@ -16,6 +16,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import queue
 import threading
 import time
 import urllib.error
@@ -613,9 +614,10 @@ class TeleopHttpServer:
 class CsvLogger:
     """Append-only CSV writer for sent + received frames.
 
-    Two files per session live in ``log_dir``: ``sent_<ts>.csv`` and
-    ``recv_<ts>.csv``. Writes are buffered behind a lock so concurrent
-    callers (sender thread, receiver thread) don't interleave rows.
+    All disk I/O is handled by a single background thread via a queue so
+    the control-loop thread (50 Hz) never blocks on file writes or flushes.
+    Rows are dropped silently if the queue fills up rather than ever stalling
+    the sender.
     """
 
     SENT_COLS = [
@@ -630,35 +632,63 @@ class CsvLogger:
         + [f"j{i}_{f}" for i in range(1, 7) for f in ("pos", "vel", "amp", "temp")]
     )
 
+    _FLUSH_EVERY = 50   # flush to disk once every N rows per file
+
     def __init__(self, log_dir: Path) -> None:
         self._dir = log_dir
         self._dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._sent_path = self._dir / f"sent_{stamp}.csv"
         self._recv_path = self._dir / f"recv_{stamp}.csv"
-        self._sent_lock = threading.Lock()
-        self._recv_lock = threading.Lock()
+
         self._sent_f = self._sent_path.open("w", newline="")
         self._recv_f = self._recv_path.open("w", newline="")
         self._sent_w = csv.writer(self._sent_f)
         self._recv_w = csv.writer(self._recv_f)
         self._sent_w.writerow(self.SENT_COLS)
         self._recv_w.writerow(self.RECV_COLS)
+
+        # Background writer: items are ("sent"|"recv", row) or None (sentinel).
+        self._q: queue.Queue = queue.Queue(maxsize=2000)
+        self._writer = threading.Thread(
+            target=self._write_loop, name="CsvWriter", daemon=True
+        )
+        self._writer.start()
         log.info("CSV logs: sent=%s recv=%s", self._sent_path, self._recv_path)
+
+    def _write_loop(self) -> None:
+        sent_n = recv_n = 0
+        while True:
+            item = self._q.get()
+            if item is None:
+                break
+            kind, row = item
+            if kind == "sent":
+                self._sent_w.writerow(row)
+                sent_n += 1
+                if sent_n % self._FLUSH_EVERY == 0:
+                    self._sent_f.flush()
+            else:
+                self._recv_w.writerow(row)
+                recv_n += 1
+                if recv_n % self._FLUSH_EVERY == 0:
+                    self._recv_f.flush()
 
     def log_sent(self, msg) -> None:
         row = [
             int(msg.timestamp_us),
             f"{msg.tracks.left_vel:.4f}", f"{msg.tracks.right_vel:.4f}",
             msg.flippers.fl, msg.flippers.fr, msg.flippers.rl, msg.flippers.rr,
-            f"{msg.ovis.position.x:.4f}", f"{msg.ovis.position.y:.4f}", f"{msg.ovis.position.z:.4f}",
+            f"{msg.ovis.position.x:.4f}", f"{msg.ovis.position.y:.4f}",
+            f"{msg.ovis.position.z:.4f}",
             f"{msg.ovis.orientation.yaw:.4f}", f"{msg.ovis.orientation.pitch:.4f}",
             f"{msg.ovis.orientation.roll:.4f}",
             int(bool(msg.gripper.open_state)),
         ]
-        with self._sent_lock:
-            self._sent_w.writerow(row)
-            self._sent_f.flush()
+        try:
+            self._q.put_nowait(("sent", row))
+        except queue.Full:
+            pass  # drop rather than block the control loop
 
     def log_recv(self, telemetry) -> None:
         row = [int(telemetry.timestamp_us), int(telemetry.machine_state)]
@@ -666,16 +696,21 @@ class CsvLogger:
             a = getattr(telemetry.ovis, f"act_{i}")
             row.extend([
                 f"{a.motor_pos:.4f}",
-                f"{0.0:.4f}",     # no velocity field on DriveNodeState
+                f"{0.0:.4f}",
                 f"{a.motor_amp:.4f}",
                 f"{a.motor_temp_c:.4f}",
             ])
-        with self._recv_lock:
-            self._recv_w.writerow(row)
-            self._recv_f.flush()
+        try:
+            self._q.put_nowait(("recv", row))
+        except queue.Full:
+            pass
 
     def close(self) -> None:
+        self._q.put(None)          # signal writer to exit
+        self._writer.join(timeout=2.0)
         try:
+            self._sent_f.flush()
             self._sent_f.close()
         finally:
+            self._recv_f.flush()
             self._recv_f.close()

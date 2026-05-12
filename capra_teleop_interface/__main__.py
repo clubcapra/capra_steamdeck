@@ -100,6 +100,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Joystick index if multiple are connected",
     )
     p.add_argument(
+        "--stick-deadzone",
+        type=float,
+        default=None,
+        help="Stick axis deadzone radius (default: 0.05). Raise if robot drifts at rest.",
+    )
+    p.add_argument(
+        "--trigger-deadzone",
+        type=float,
+        default=None,
+        help="Trigger deadzone (default: 0.02).",
+    )
+    p.add_argument(
         "--no-haptics", action="store_true", help="Disable rumble feedback"
     )
     p.add_argument(
@@ -218,6 +230,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # Apply hard-coded defaults for values that weren't set by CLI or config.
     _FALLBACK_DEFAULTS: dict = {
         "api_base_url": "http://192.168.2.2:8080",
+        "stick_deadzone": 0.05,
+        "trigger_deadzone": 0.02,
     }
     for key, val in _FALLBACK_DEFAULTS.items():
         if getattr(args, key, None) is None:
@@ -472,6 +486,8 @@ def build_controller(args: argparse.Namespace) -> ControllerBase:
         haptics_enabled=not args.no_haptics,
         device_index=args.device_index,
         torque_receiver=torque_receiver,
+        stick_deadzone=args.stick_deadzone,
+        trigger_deadzone=args.trigger_deadzone,
     )
     if args.debug_input:
         _tee_input(controller)
