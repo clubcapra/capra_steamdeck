@@ -37,6 +37,15 @@ if [[ ! -f "$STAMP_FILE" ]] || [[ "$REQ_FILE" -nt "$STAMP_FILE" ]]; then
     touch "$STAMP_FILE"
 fi
 
+# Recompile protobuf modules when any .proto file is newer than the stamp.
+PROTO_STAMP="$SCRIPT_DIR/proto/core/.proto.stamp"
+if [[ ! -f "$PROTO_STAMP" ]] || [[ "$STAMP_FILE" -nt "$PROTO_STAMP" ]] || \
+   find "$SCRIPT_DIR/proto" -name "*.proto" -newer "$PROTO_STAMP" | grep -q .; then
+    echo "[bootstrap] compiling protobuf files"
+    python3 "$SCRIPT_DIR/build_protos.py"
+    touch "$PROTO_STAMP"
+fi
+
 # SDL controller DB — ensures unrecognized pads (e.g. Steam Deck on older
 # Ubuntu SDL) get remapped to the standard Xbox axis/button layout the
 # code assumes. Downloaded once, reused thereafter.
