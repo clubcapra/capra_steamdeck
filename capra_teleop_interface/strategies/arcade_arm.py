@@ -5,8 +5,7 @@ Layout:
     Left stick X:        arm orientation yaw  (twist left/right)
     Left stick Y:        arm orientation pitch  (up = +pitch)
     DPAD left / right:   arm orientation roll
-    Right trigger:       gripper close  (binary: 0 or 255)
-    Left trigger:        gripper open   (overrides right trigger if held harder)
+    RB (right bumper):   toggle gripper open / closed
 
 Tracks are zeroed — arm mode does not drive the rover.
 """
@@ -54,6 +53,8 @@ class ArmControlStrategy(ControlStrategy):
 
     def __init__(self) -> None:
         self._last_update: float | None = None
+        self._gripper_closed = False
+        self._rb_was_pressed = False
 
     def on_activate(self) -> None:
         self._last_update = None
@@ -83,8 +84,12 @@ class ArmControlStrategy(ControlStrategy):
         )
         msg.ovis.orientation.roll = roll * OVIS_AXIS_LIMIT
 
-        # Gripper: binary open/close — right trigger closes, left trigger opens.
-        msg.gripper.position = 255 if inp.right_trigger > inp.left_trigger else 0
+        # Gripper: edge-triggered toggle on RB.
+        rb = inp.is_pressed(Button.RB)
+        if rb and not self._rb_was_pressed:
+            self._gripper_closed = not self._gripper_closed
+        self._rb_was_pressed = rb
+        msg.gripper.position = 255 if self._gripper_closed else 0
 
         return msg
 
