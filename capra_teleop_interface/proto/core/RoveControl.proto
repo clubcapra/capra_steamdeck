@@ -37,5 +37,5 @@ message Ovis {
 }
 
 message Gripper {
-    bool open_state = 1;
+    uint32 position = 1;  // 0 = fully open, 255 = fully closed
 }

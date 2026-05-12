@@ -46,6 +46,7 @@ from .network import (
     UdpTorqueReceiver,
 )
 from .strategies import (
+    ArcadeArmStrategy,
     ArmControlStrategy,
     BaseControlStrategy,
     ControlStrategy,
@@ -61,6 +62,7 @@ DEVICES = {
 STRATEGIES = {
     "base_control": BaseControlStrategy,
     "arm_control": ArmControlStrategy,
+    "arcade_arm": ArcadeArmStrategy,
 }
 
 
@@ -257,7 +259,7 @@ def _format_frame(msg) -> str:
         f"{msg.flippers.rl:+d}/{msg.flippers.rr:+d}  "
         f"twist xyz=({o.position.x:+.2f},{o.position.y:+.2f},{o.position.z:+.2f}) "
         f"ypr=({o.orientation.yaw:+.2f},{o.orientation.pitch:+.2f},{o.orientation.roll:+.2f})  "
-        f"grip={'O' if msg.gripper.open_state else 'C'}"
+        f"grip={msg.gripper.position:3d}/255"
     )
 
 
@@ -378,7 +380,7 @@ def _snapshot_msg(msg) -> tuple:
         round(msg.ovis.orientation.yaw, 3),
         round(msg.ovis.orientation.pitch, 3),
         round(msg.ovis.orientation.roll, 3),
-        bool(msg.gripper.open_state),
+        msg.gripper.position,
     )
 
 

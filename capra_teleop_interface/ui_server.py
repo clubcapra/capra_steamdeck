@@ -114,6 +114,9 @@ _INDEX_HTML = """<!doctype html>
   <button id="btn_arm_control" class="strat-btn" onclick="switch_strategy('arm_control')">
     Arm Control
   </button>
+  <button id="btn_arcade_arm" class="strat-btn" onclick="switch_strategy('arcade_arm')">
+    Arcade Arm
+  </button>
 </div>
 
 <div class="grid">
@@ -230,7 +233,7 @@ async function tick() {
         fmt(s.ovis.x) + ' / ' + fmt(s.ovis.y) + ' / ' + fmt(s.ovis.z);
       document.getElementById('ovis_ori').textContent =
         fmt(s.ovis.yaw) + ' / ' + fmt(s.ovis.pitch) + ' / ' + fmt(s.ovis.roll);
-      document.getElementById('gripper').textContent = s.gripper_open ? 'OPEN' : 'CLOSED';
+      document.getElementById('gripper').textContent = s.gripper_position + ' / 255';
       document.getElementById('sent_count').textContent = j.sent_count;
     }
     document.getElementById('rx_count').textContent = j.rx_count;
@@ -337,7 +340,7 @@ class TeleopState:
                 "pitch": msg.ovis.orientation.pitch,
                 "roll": msg.ovis.orientation.roll,
             },
-            "gripper_open": bool(msg.gripper.open_state),
+            "gripper_position": msg.gripper.position,
             "timestamp_us": int(msg.timestamp_us),
         }
         with self._lock:
@@ -409,7 +412,7 @@ def zero_rove_control(msg) -> None:
     msg.ovis.orientation.yaw = 0.0
     msg.ovis.orientation.pitch = 0.0
     msg.ovis.orientation.roll = 0.0
-    # gripper.open_state is latched state, not a velocity — leave it.
+    # gripper.position is latched state, not a velocity — leave it.
 
 
 def _post_one(url: str, body: Optional[bytes] = None) -> tuple[str, str]:
@@ -625,7 +628,7 @@ class CsvLogger:
         "flip_fl", "flip_fr", "flip_rl", "flip_rr",
         "ovis_x", "ovis_y", "ovis_z",
         "ovis_yaw", "ovis_pitch", "ovis_roll",
-        "gripper_open",
+        "gripper_position",
     ]
     RECV_COLS = (
         ["timestamp_us", "machine_state"]
@@ -683,7 +686,7 @@ class CsvLogger:
             f"{msg.ovis.position.z:.4f}",
             f"{msg.ovis.orientation.yaw:.4f}", f"{msg.ovis.orientation.pitch:.4f}",
             f"{msg.ovis.orientation.roll:.4f}",
-            int(bool(msg.gripper.open_state)),
+            msg.gripper.position,
         ]
         try:
             self._q.put_nowait(("sent", row))

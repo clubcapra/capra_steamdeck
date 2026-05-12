@@ -2,12 +2,11 @@
 
 Layout:
     Right stick X / Y:   arm position X / Y  (Y inverted: up = +Y)
-    Left trigger:        arm position Z+  (up)
-    Right trigger:       arm position Z−  (down)
     Left stick X:        arm orientation yaw  (twist left/right)
     Left stick Y:        arm orientation pitch  (up = +pitch)
     DPAD left / right:   arm orientation roll
-    Back grip R5:        toggle gripper open / closed
+    Right trigger:       gripper close  (0 = fully open, 255 = fully closed)
+    Left trigger:        gripper open   (subtracts from right trigger)
 
 Tracks are zeroed — arm mode does not drive the rover.
 """
@@ -55,8 +54,6 @@ class ArmControlStrategy(ControlStrategy):
 
     def __init__(self) -> None:
         self._last_update: float | None = None
-        self._gripper_open = False
-        self._gripper_btn_was_pressed = False
 
     def on_activate(self) -> None:
         self._last_update = None
@@ -72,10 +69,10 @@ class ArmControlStrategy(ControlStrategy):
         msg.tracks.left_vel = 0.0
         msg.tracks.right_vel = 0.0
 
-        # Arm position: right stick XY (Y inverted), triggers for Z.
+        # Arm position: right stick XY (Y inverted); Z not mapped in this schema.
         msg.ovis.position.x = _ovis_axis(inp.right_x)
         msg.ovis.position.y = _ovis_axis(-inp.right_y)
-        msg.ovis.position.z = _ovis_axis(inp.left_trigger - inp.right_trigger)
+        msg.ovis.position.z = 0.0
 
         # Arm orientation: left stick X=yaw, Y=pitch (inverted); DPAD=roll.
         msg.ovis.orientation.yaw = _ovis_axis(inp.left_x)
@@ -86,12 +83,9 @@ class ArmControlStrategy(ControlStrategy):
         )
         msg.ovis.orientation.roll = roll * OVIS_AXIS_LIMIT
 
-        # Gripper: edge-triggered toggle on R5 back grip.
-        gripper_btn = inp.is_pressed(Button.R5) or inp.is_pressed(Button.START)
-        if gripper_btn and not self._gripper_btn_was_pressed:
-            self._gripper_open = not self._gripper_open
-        self._gripper_btn_was_pressed = gripper_btn
-        msg.gripper.open_state = self._gripper_open
+        # Gripper: right trigger = close, left trigger = open; net clamped 0-255.
+        grip_raw = int((inp.right_trigger - inp.left_trigger) * 255)
+        msg.gripper.position = max(0, min(255, grip_raw))
 
         return msg
 

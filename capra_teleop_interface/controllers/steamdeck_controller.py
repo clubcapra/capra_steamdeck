@@ -76,14 +76,6 @@ class SteamDeckController(XboxController):
         if abs(inp.right_y) < _STEAMDECK_STICK_DEADZONE:
             inp.right_y = 0.0
 
-        # The analog trigger axes (indices 4/5) on hid-steam without Steam
-        # Input remapping are unreliable — they may actually be trackpad X/Y
-        # values that never settle to a neutral. Ignore them entirely; the
-        # strategy should use digital buttons (bumpers, grip buttons, or
-        # DPAD) on the Deck instead.
-        inp.left_trigger = 0.0
-        inp.right_trigger = 0.0
-
         # Layer the grip-button mapping on top of the Xbox base.
         for idx, btn in _EXTRA_BUTTON_MAP.items():
             try:

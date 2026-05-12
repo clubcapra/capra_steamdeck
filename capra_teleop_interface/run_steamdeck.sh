@@ -49,6 +49,10 @@ if [[ ! -f "$DB_FILE" ]]; then
 fi
 export SDL_GAMECONTROLLERCONFIG_FILE="$DB_FILE"
 
+# Kill any stale instance so the UI port is free before we bind.
+pkill -f "capra_teleop_interface" 2>/dev/null || true
+sleep 0.3
+
 cd "$PARENT_DIR"
 exec python3 -m capra_teleop_interface \
     --config "$CONFIG_FILE" \
