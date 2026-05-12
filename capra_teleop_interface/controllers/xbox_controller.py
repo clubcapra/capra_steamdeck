@@ -21,11 +21,6 @@ from ..haptics.sdl2_haptic import Sdl2Haptic
 
 log = logging.getLogger(__name__)
 
-# SDL2 standardized button/axis indices for Xbox-style controllers.
-# (pygame joystick.get_button / get_axis with an SDL_GAMECONTROLLER mapping.)
-_AXIS_LX, _AXIS_LY = 0, 1
-_AXIS_RX, _AXIS_RY = 2, 3
-_AXIS_LT, _AXIS_RT = 4, 5
 
 # After calibration, anything below this on a trigger is treated as 0.
 # Large enough to absorb Steam Deck hid-steam drift (triggers on ABS_HAT2
@@ -54,6 +49,11 @@ _BUTTON_MAP = {
 
 class XboxController(ControllerBase):
     """Xbox 360 / Xbox One / Xbox Series controller via SDL2."""
+
+    # Axis indices — subclasses override these for device-specific layouts.
+    _AXIS_LX, _AXIS_LY = 0, 1
+    _AXIS_RX, _AXIS_RY = 2, 3
+    _AXIS_LT, _AXIS_RT = 4, 5
 
     def __init__(self, *args, device_index: int = 0, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -122,12 +122,12 @@ class XboxController(ControllerBase):
             self._calibrate_rest()
 
         inp = ControllerInput()
-        inp.left_x = self._cal_stick(_AXIS_LX)
-        inp.left_y = self._cal_stick(_AXIS_LY)
-        inp.right_x = self._cal_stick(_AXIS_RX)
-        inp.right_y = self._cal_stick(_AXIS_RY)
-        inp.left_trigger = self._cal_trigger(_AXIS_LT)
-        inp.right_trigger = self._cal_trigger(_AXIS_RT)
+        inp.left_x = self._cal_stick(self._AXIS_LX)
+        inp.left_y = self._cal_stick(self._AXIS_LY)
+        inp.right_x = self._cal_stick(self._AXIS_RX)
+        inp.right_y = self._cal_stick(self._AXIS_RY)
+        inp.left_trigger = self._cal_trigger(self._AXIS_LT)
+        inp.right_trigger = self._cal_trigger(self._AXIS_RT)
 
         for idx, btn in _BUTTON_MAP.items():
             try:
@@ -192,14 +192,15 @@ class XboxController(ControllerBase):
             return 0.0
 
     def _calibrate_rest(self) -> None:
-        for idx in (_AXIS_LX, _AXIS_LY, _AXIS_RX, _AXIS_RY, _AXIS_LT, _AXIS_RT):
+        for idx in (self._AXIS_LX, self._AXIS_LY, self._AXIS_RX, self._AXIS_RY,
+                    self._AXIS_LT, self._AXIS_RT):
             self._axis_rest[idx] = self._axis(idx)
         log.info(
             "Axis rest positions: LX=%.2f LY=%.2f RX=%.2f RY=%.2f LT=%.2f RT=%.2f "
             "(buttons=%d, axes=%d, hats=%d)",
-            self._axis_rest[_AXIS_LX], self._axis_rest[_AXIS_LY],
-            self._axis_rest[_AXIS_RX], self._axis_rest[_AXIS_RY],
-            self._axis_rest[_AXIS_LT], self._axis_rest[_AXIS_RT],
+            self._axis_rest[self._AXIS_LX], self._axis_rest[self._AXIS_LY],
+            self._axis_rest[self._AXIS_RX], self._axis_rest[self._AXIS_RY],
+            self._axis_rest[self._AXIS_LT], self._axis_rest[self._AXIS_RT],
             self._joystick.get_numbuttons(),
             self._joystick.get_numaxes(),
             self._joystick.get_numhats(),
@@ -210,9 +211,14 @@ class XboxController(ControllerBase):
         return self._axis(idx) - self._axis_rest.get(idx, 0.0)
 
     def _cal_trigger(self, idx: int) -> float:
-        # Produce 0 at rest, 1 at fully pulled.
-        # abs() handles both positive (SDL GameController normalization) and
-        # negative (Steam Deck raw joystick, ABS_HAT2 channels) polarities.
+        # Produce 0.0 at rest, 1.0 at fully pulled.
+        # span = 1.0 - rest handles three driver conventions:
+        #   rest=-1 → span=2   (raw SDL joystick, e.g. Steam Deck axis 8/9)
+        #   rest= 0 → span=1   (Steam Input Xbox emulation, positive polarity)
+        # abs(delta) handles negative-going axes (rest=0, axis→-1).
         rest = self._axis_rest.get(idx, 0.0)
-        value = min(1.0, abs(self._axis(idx) - rest))
+        span = 1.0 - rest
+        if span <= 0.01:
+            return 0.0
+        value = min(1.0, abs(self._axis(idx) - rest) / span)
         return 0.0 if value < _TRIGGER_DEADZONE else value

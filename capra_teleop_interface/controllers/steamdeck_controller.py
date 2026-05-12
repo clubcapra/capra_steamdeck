@@ -47,6 +47,10 @@ _EXTRA_BUTTON_MAP = {
 class SteamDeckController(XboxController):
     """SteamDeck controller via Steam Input (SDL2)."""
 
+    # Raw joystick axes on the Steam Deck differ from the Xbox SDL mapping.
+    # Confirmed via --probe: R2=axis8 (rest -1→+1), L2=axis9 (rest -1→+1).
+    _AXIS_LT, _AXIS_RT = 9, 8
+
     def _open_device(self) -> None:
         super()._open_device()
         if self._joystick is None:
