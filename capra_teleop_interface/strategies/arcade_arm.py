@@ -50,6 +50,7 @@ def _clamp(v: float) -> float:
 
 class ArmControlStrategy(ControlStrategy):
     name = "arm_control"
+    manages_gripper = True
 
     def __init__(self) -> None:
         self._last_update: float | None = None

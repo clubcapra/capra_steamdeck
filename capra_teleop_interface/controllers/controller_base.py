@@ -66,6 +66,7 @@ class ControllerBase(ABC):
         self._stop = False
         self._stick_deadzone = stick_deadzone
         self._trigger_deadzone = trigger_deadzone
+        self._gripper_latch: int = 0  # persists across strategy switches
 
     # ---- Template method ----------------------------------------------------
 
@@ -103,6 +104,13 @@ class ControllerBase(ABC):
                 # flipper/arm positions) stays fresh; skipping builds would
                 # cause a jump when the operator moves again.
                 msg = self._strategy.build_message(inp)
+
+                # Gripper latch: strategies that don't manage the gripper
+                # inherit the last position so switching modes never snaps it open.
+                if self._strategy.manages_gripper:
+                    self._gripper_latch = msg.gripper.position
+                else:
+                    msg.gripper.position = self._gripper_latch
 
                 # Push-based control: the robot stops when packets stop
                 # arriving, so suppress frames where nothing is commanded

@@ -21,6 +21,11 @@ class ControlStrategy(ABC):
     #: Human-readable name, shown in logs / UI.
     name: str = "unnamed"
 
+    #: Set True in strategies that explicitly set gripper.position.
+    #: When False, the controller re-applies its latched gripper value so
+    #: switching strategies never resets the gripper to 0.
+    manages_gripper: bool = False
+
     @abstractmethod
     def build_message(self, inp: ControllerInput) -> RoveControl_pb2.RoveControl:
         """Return a populated ``RoveControl`` message for this frame."""
