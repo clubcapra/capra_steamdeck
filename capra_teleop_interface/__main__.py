@@ -91,7 +91,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Initial control strategy (default: base_control). Can be switched live via the UI.",
     )
     p.add_argument(
-        "--rate", type=float, default=50.0, help="Polling rate in Hz (default: 50)"
+        "--rate", type=float, default=100.0, help="Control loop rate in Hz (default: 100)"
     )
     p.add_argument(
         "--device-index",
@@ -230,7 +230,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # Apply hard-coded defaults for values that weren't set by CLI or config.
     _FALLBACK_DEFAULTS: dict = {
         "api_base_url": "http://192.168.2.2:8080",
-        "stick_deadzone": 0.05,
+        "stick_deadzone": 0.10,
         "trigger_deadzone": 0.02,
     }
     for key, val in _FALLBACK_DEFAULTS.items():
@@ -398,18 +398,22 @@ def _snapshot_changed(prev: tuple, curr: tuple) -> bool:
 def _tee_sender(sender: UdpSender, verbose: bool = False) -> None:
     """Wrap sender.send so the operator sees the outgoing proto live.
 
-    ``verbose`` prints every packet (firehose, 50 Hz). The default mode
-    only logs when a real change crosses the epsilon, plus a heartbeat
-    line every ~2 s so silence isn't ambiguous.
+    Sends happen every loop tick when not idle — this wrapper only LOGS
+    on change or the 2 s heartbeat to keep stdout readable.  The frame
+    counter and Hz line show the true continuous send rate.
     """
     original_send = sender.send
-    state = {"count": 0, "last_snap": None, "last_print": 0.0}
+    state = {
+        "count": 0, "last_snap": None, "last_print": 0.0,
+        "window_start": time.monotonic(), "window_count": 0,
+    }
     endpoint = sender.endpoint
 
     def send_and_print(msg):
         ok = original_send(msg)
         if ok:
             state["count"] += 1
+            state["window_count"] += 1
             snap = _snapshot_msg(msg)
             now = time.monotonic()
             should_print = verbose
@@ -420,8 +424,12 @@ def _tee_sender(sender: UdpSender, verbose: bool = False) -> None:
                 elif (now - state["last_print"]) >= _FRAME_LOG_HEARTBEAT_S:
                     should_print = True
             if should_print:
+                elapsed = now - state["window_start"]
+                hz = state["window_count"] / elapsed if elapsed > 0 else 0.0
+                state["window_start"] = now
+                state["window_count"] = 0
                 print(
-                    f"[#{state['count']:05d} -> {endpoint.host}:{endpoint.port}] "
+                    f"[#{state['count']:05d} {hz:5.1f}Hz -> {endpoint.host}:{endpoint.port}] "
                     f"{_format_frame(msg)}",
                     flush=True,
                 )
