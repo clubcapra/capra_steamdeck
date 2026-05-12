@@ -46,9 +46,9 @@ class BaseControlStrategy(ControlStrategy):
         msg = RoveControl_pb2.RoveControl()
         msg.timestamp_us = int(now * 1_000_000)
 
-        # Arcade drive: left stick Y = throttle (up = -1, invert), X = steer.
-        throttle = -_deadzone(inp.left_y)
-        steer = _deadzone(inp.left_x)
+        # Arcade drive: left stick Y = throttle (up = +1 on Deck), X = steer.
+        throttle = _deadzone(inp.left_y)
+        steer = -_deadzone(inp.left_x)
         msg.tracks.left_vel = _clamp(throttle + steer)
         msg.tracks.right_vel = _clamp(throttle - steer)
 

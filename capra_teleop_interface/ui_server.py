@@ -109,7 +109,7 @@ _INDEX_HTML = """<!doctype html>
 
 <div class="strategy-bar">
   <button id="btn_base_control" class="strat-btn" onclick="switch_strategy('base_control')">
-    Base Control
+    Tank Drive
   </button>
   <button id="btn_arm_control" class="strat-btn" onclick="switch_strategy('arm_control')">
     Arm Control
