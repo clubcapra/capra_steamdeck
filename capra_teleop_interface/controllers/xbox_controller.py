@@ -23,10 +23,9 @@ log = logging.getLogger(__name__)
 
 
 # After calibration, anything below this on a trigger is treated as 0.
-# Large enough to absorb Steam Deck hid-steam drift (triggers on ABS_HAT2
-# don't always settle to the calibrated rest) while leaving plenty of
-# travel for intentional pulls.
-_TRIGGER_DEADZONE = 0.2
+# Kept small: rest is anchored by calibration (axis 8/9 rest at -1.0 on
+# Steam Deck), so abs(delta)/span drift at rest is negligible.
+_TRIGGER_DEADZONE = 0.02
 
 _BUTTON_MAP = {
     0: Button.A,
