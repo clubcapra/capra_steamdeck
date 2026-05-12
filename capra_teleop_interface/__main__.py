@@ -31,6 +31,8 @@ if __package__ in (None, ""):
         sys.path.insert(0, _parent)
     __package__ = os.path.basename(_here)
 
+from .config import apply as _apply_config
+from .config import load as _load_config
 from .controllers import (
     ControllerBase,
     SteamDeckController,
@@ -64,8 +66,18 @@ STRATEGIES = {
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Rove control interface")
-    p.add_argument("--host", required=True, help="Rover IP or hostname")
-    p.add_argument("--port", type=int, required=True, help="Rover UDP port")
+    p.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help=(
+            "YAML config file.  CLI flags override any value set in the file. "
+            "host/port may be omitted from the CLI when set in the config."
+        ),
+    )
+    p.add_argument("--host", default=None, help="Rover IP or hostname")
+    p.add_argument("--port", type=int, default=None, help="Rover UDP port")
     p.add_argument(
         "--device",
         choices=DEVICES.keys(),
@@ -183,14 +195,41 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--api-base-url",
-        default="http://192.168.2.2:8080",
+        default=None,
         help=(
             "rove_sensor_api base URL used by the UI E-stop button "
             "(default: http://192.168.2.2:8080). Set to '' to disable the "
             "direct api call (zeroed outbound commands still happen)."
         ),
     )
-    return p.parse_args(argv)
+
+    # ---- two-pass parse: load config file first, then re-parse with its defaults ----
+    # First pass only needs --config; ignore unknown/missing args.
+    pre, _ = p.parse_known_args(argv)
+    if pre.config is not None:
+        try:
+            cfg = _load_config(pre.config)
+        except Exception as exc:
+            p.error(f"Cannot load config file {pre.config}: {exc}")
+        p.set_defaults(**cfg)
+
+    args = p.parse_args(argv)
+
+    # Apply hard-coded defaults for values that weren't set by CLI or config.
+    _FALLBACK_DEFAULTS: dict = {
+        "api_base_url": "http://192.168.2.2:8080",
+    }
+    for key, val in _FALLBACK_DEFAULTS.items():
+        if getattr(args, key, None) is None:
+            setattr(args, key, val)
+
+    # Validate required fields that may come from either CLI or config file.
+    if not args.host:
+        p.error("--host is required (or set 'host' in your --config file)")
+    if not args.port:
+        p.error("--port is required (or set 'port' in your --config file)")
+
+    return args
 
 
 def _format_frame(msg) -> str:

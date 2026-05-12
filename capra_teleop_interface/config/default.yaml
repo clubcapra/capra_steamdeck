@@ -1,0 +1,33 @@
+# capra_teleop_interface — operator-side config
+# Pass this file with: python -m capra_teleop_interface --config config/default.yaml
+# CLI flags always override values set here.
+
+# ---------- Rover connection ----------
+host: "192.168.2.2"
+port: 9101
+
+# ---------- Controller ----------
+device: "steamdeck"       # steamdeck | xbox
+strategy: "base_control"  # base_control | arm_control
+rate: 50.0                # Hz — control loop polling rate
+device_index: 0           # joystick index when multiple pads are connected
+
+# ---------- Haptics ----------
+# no_haptics: false       # uncomment to disable rumble
+torque_listen_host: "0.0.0.0"
+torque_listen_port: 5006
+torque_max: 50.0          # Nm that maps to full-scale rumble
+
+# ---------- Inbound telemetry ----------
+telemetry_listen_host: "0.0.0.0"
+telemetry_listen_port: 7001
+
+# ---------- Operator UI ----------
+# no_ui: false
+ui_host: "127.0.0.1"
+ui_port: 8765
+api_base_url: "http://192.168.2.2:8080"  # rove_sensor_api for E-stop
+
+# ---------- Logging ----------
+log_dir: "logs"
+# no_log: false

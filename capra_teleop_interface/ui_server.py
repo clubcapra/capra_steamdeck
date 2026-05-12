@@ -262,7 +262,7 @@ function apply_estop(is_estopped) {
     banner.classList.remove('hidden');
     btn.disabled = true; btn.textContent = 'STOPPED';
     resume.classList.remove('hidden');
-    stat.textContent = 'outbound zeroed \xb7 sensor api asked to erase trajectories';
+    stat.textContent = 'outbound zeroed \xb7 ODrives & arm estopped';
   } else {
     banner.classList.add('hidden');
     btn.disabled = false; btn.textContent = 'E-STOP';
@@ -411,40 +411,96 @@ def zero_rove_control(msg) -> None:
     # gripper.open_state is latched state, not a velocity — leave it.
 
 
-def post_estop_to_api(api_base_url: str) -> str:
-    """Tell the sensor api to halt the arm directly.
+def _post_one(url: str, body: Optional[bytes] = None) -> tuple[str, str]:
+    """POST to *url* with an optional JSON *body*. Returns (url, status_str).
 
-    We don't rely on the rover-side wrapper for this: the wrapper's
-    velocity stream will already go to zero (the strategy is zeroed
-    upstream), but erasing queued trajectories is the only way to drop
-    motion that's already been latched into the firmware. Best effort —
-    a failed POST is logged but doesn't gate the local zeroing.
+    Best-effort: never raises — all errors are returned as status strings so
+    the caller can collect results without try/except soup.
+    """
+    headers: dict[str, str] = {}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            return url, f"{resp.status}"
+    except urllib.error.URLError as e:
+        reason = e.reason if hasattr(e, "reason") else str(e)
+        log.warning("E-stop POST %s failed: %s", url, reason)
+        return url, f"failed: {reason}"
+    except Exception as e:
+        log.warning("E-stop POST %s raised: %s", url, e)
+        return url, f"error: {e}"
+
+
+def post_estop_to_api(api_base_url: str) -> str:
+    """Trigger estop on every sensor that supports it, plus zero the Kinova arm.
+
+    Steps:
+      1. GET /discover → find all sensors with has_estop=true.
+      2. POST /{id}/estop to each of them concurrently (one thread per sensor).
+      3. Also POST the Kinova arm zero-velocity / erase-trajectories command
+         (belt-and-suspenders for the arm, which may not be in /discover yet).
+
+    All calls are best-effort with a 1.5 s per-request timeout.  A failed POST
+    is logged but never gates the local outbound zeroing, which has already
+    happened before this function is called.
     """
     if not api_base_url:
         return "no api_base_url configured"
-    url = api_base_url.rstrip("/") + "/kinova_arm/command"
-    body = {
-        "erase_trajectories": True,
-        "joint_1_vel": 0.0,
-        "joint_2_vel": 0.0,
-        "joint_3_vel": 0.0,
-        "joint_4_vel": 0.0,
-        "joint_5_vel": 0.0,
-        "joint_6_vel": 0.0,
-    }
-    data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}, method="POST"
-    )
+
+    base = api_base_url.rstrip("/")
+    results: list[tuple[str, str]] = []
+
+    # --- 1. Discover sensors and collect estop URLs ---
+    estop_urls: list[str] = []
     try:
-        with urllib.request.urlopen(req, timeout=1.5) as resp:
-            return f"api POST {resp.status}"
-    except urllib.error.URLError as e:
-        log.warning("E-stop api POST failed: %s", e)
-        return f"api POST failed: {e.reason if hasattr(e, 'reason') else e}"
-    except Exception as e:  # pragma: no cover
-        log.warning("E-stop api POST raised: %s", e)
-        return f"api POST raised: {e}"
+        with urllib.request.urlopen(f"{base}/discover", timeout=1.5) as resp:
+            sensors: list[dict] = json.loads(resp.read())
+        for s in sensors:
+            if s.get("has_estop"):
+                estop_urls.append(f"{base}/{s['id']}/estop")
+    except Exception as e:
+        log.warning("E-stop /discover failed: %s — falling back to direct estop URLs", e)
+        # Fall back: hit the ODrive estop endpoints directly using the known node IDs.
+        for nid in (31, 32, 33, 34):
+            estop_urls.append(f"{base}/odrive_{nid}/estop")
+
+    # --- 2. Fire all estop POSTs in parallel ---
+    threads: list[threading.Thread] = []
+    lock = threading.Lock()
+
+    def _fire(url: str) -> None:
+        r = _post_one(url)
+        with lock:
+            results.append(r)
+
+    for url in estop_urls:
+        t = threading.Thread(target=_fire, args=(url,), daemon=True)
+        t.start()
+        threads.append(t)
+
+    # --- 3. Also erase Kinova arm trajectories ---
+    kinova_url = f"{base}/kinova_arm/command"
+    kinova_body = json.dumps({
+        "erase_trajectories": True,
+        "joint_1_vel": 0.0, "joint_2_vel": 0.0, "joint_3_vel": 0.0,
+        "joint_4_vel": 0.0, "joint_5_vel": 0.0, "joint_6_vel": 0.0,
+    }).encode("utf-8")
+    kt = threading.Thread(
+        target=lambda: results.append(_post_one(kinova_url, kinova_body)),
+        daemon=True,
+    )
+    kt.start()
+    threads.append(kt)
+
+    for t in threads:
+        t.join(timeout=2.0)
+
+    ok = sum(1 for _, s in results if s.isdigit() or s.startswith("2"))
+    summary = f"{ok}/{len(results)} estop calls ok"
+    log.warning("E-stop API results: %s", results)
+    return summary
 
 
 class TeleopHttpServer:

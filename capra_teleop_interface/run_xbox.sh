@@ -2,22 +2,20 @@
 # Xbox controller launcher: base control (arcade + flippers), self-bootstrapping venv.
 #
 # Usage:
-#   ./run_xbox.sh                           # uses defaults
-#   ./run_xbox.sh --host 192.168.1.50       # override host
-#   HOST=10.0.0.5 PORT=5005 ./run_xbox.sh   # override via env
+#   ./run_xbox.sh                                       # uses config/default.yaml
+#   ./run_xbox.sh --host 192.168.1.50 --port 5005       # override host/port
+#   CONFIG=config/my_robot.yaml ./run_xbox.sh            # alternate config file
 #
-# Any extra args are forwarded to the module.
+# Any extra args are forwarded verbatim to the module.
 
 set -euo pipefail
-
-HOST="${HOST:-192.168.168.44}"
-PORT="${PORT:-5005}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 VENV_DIR="$SCRIPT_DIR/.venv"
 REQ_FILE="$SCRIPT_DIR/requirements.txt"
 STAMP_FILE="$VENV_DIR/.requirements.stamp"
+CONFIG_FILE="${CONFIG:-$SCRIPT_DIR/config/default.yaml}"
 
 if [[ ! -d "$VENV_DIR" ]]; then
     echo "[bootstrap] creating venv at $VENV_DIR"
@@ -44,11 +42,8 @@ fi
 export SDL_GAMECONTROLLERCONFIG_FILE="$DB_FILE"
 
 cd "$PARENT_DIR"
-exec python -m control_interface \
-    --host "$HOST" \
-    --port "$PORT" \
+exec python -m capra_teleop_interface \
+    --config "$CONFIG_FILE" \
     --device xbox \
-    --strategy base_control \
-    --print-frames \
     --debug-input \
     "$@"
