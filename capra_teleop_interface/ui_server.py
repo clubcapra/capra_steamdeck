@@ -456,9 +456,11 @@ def post_estop_to_api(api_base_url: str) -> str:
     estop_urls: list[str] = []
     try:
         with urllib.request.urlopen(f"{base}/discover", timeout=1.5) as resp:
-            sensors: list[dict] = json.loads(resp.read())
-        for s in sensors:
-            if s.get("has_estop"):
+            data = json.loads(resp.read())
+        sensor_list = data.get("sensors", data) if isinstance(data, dict) else data
+        for s in sensor_list:
+            # estop support indicated by endpoints.estop being non-null
+            if s.get("endpoints", {}).get("estop"):
                 estop_urls.append(f"{base}/{s['id']}/estop")
     except Exception as e:
         log.warning("E-stop /discover failed: %s — falling back to direct estop URLs", e)

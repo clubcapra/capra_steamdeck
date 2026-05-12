@@ -19,7 +19,12 @@ CONFIG_FILE="${CONFIG:-$SCRIPT_DIR/config/default.yaml}"
 
 if [[ ! -d "$VENV_DIR" ]]; then
     echo "[bootstrap] creating venv at $VENV_DIR"
-    python3 -m venv "$VENV_DIR"
+    if ! python3 -m venv "$VENV_DIR" 2>/dev/null; then
+        PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        echo "[bootstrap] venv unavailable — installing python${PY_VER}-venv"
+        sudo apt-get install -y "python${PY_VER}-venv"
+        python3 -m venv "$VENV_DIR"
+    fi
 fi
 
 # shellcheck disable=SC1091
@@ -42,7 +47,7 @@ fi
 export SDL_GAMECONTROLLERCONFIG_FILE="$DB_FILE"
 
 cd "$PARENT_DIR"
-exec python -m capra_teleop_interface \
+exec python3 -m capra_teleop_interface \
     --config "$CONFIG_FILE" \
     --device xbox \
     --debug-input \
