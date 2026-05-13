@@ -1,7 +1,9 @@
 """Arm control strategy: 6-DOF Ovis arm as Cartesian twist.
 
 Layout:
-    Right stick X / Y:   arm position X / Y  (Y inverted: up = +Y)
+    Right stick X:       arm position Y  (sideways)
+    Right stick Y:       arm position X  (push forward = up on stick = +X)
+    DPAD up / down:      arm position Z  (up on dpad = +Z world)
     Left stick X:        arm orientation yaw  (twist left/right)
     Left stick Y:        arm orientation pitch  (up = +pitch)
     DPAD left / right:   arm orientation roll
@@ -71,12 +73,19 @@ class ArmControlStrategy(ControlStrategy):
         msg.tracks.left_vel = 0.0
         msg.tracks.right_vel = 0.0
 
-        # Arm position: right stick XY (Y inverted); Z not mapped in this schema.
-        msg.ovis.position.x = _ovis_axis(inp.right_x)
-        msg.ovis.position.y = _ovis_axis(-inp.right_y)
-        msg.ovis.position.z = 0.0
+        # Arm position: right stick swapped vs. world XY so the operator's
+        # "push forward" maps to +X (away from the rover) and "left/right"
+        # maps to ±Y. Z is on the DPAD up/down.
+        msg.ovis.position.x = _ovis_axis(-inp.right_y)
+        msg.ovis.position.y = _ovis_axis(inp.right_x)
+        z = (
+            (1.0 if inp.is_pressed(Button.DPAD_UP) else 0.0)
+            - (1.0 if inp.is_pressed(Button.DPAD_DOWN) else 0.0)
+        )
+        msg.ovis.position.z = z * OVIS_AXIS_LIMIT
 
-        # Arm orientation: left stick X=yaw, Y=pitch (inverted); DPAD=roll.
+        # Arm orientation: left stick X=yaw, Y=pitch (inverted);
+        # DPAD left/right = roll.
         msg.ovis.orientation.yaw = _ovis_axis(inp.left_x)
         msg.ovis.orientation.pitch = _ovis_axis(-inp.left_y)
         roll = (
