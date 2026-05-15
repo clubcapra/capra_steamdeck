@@ -80,21 +80,51 @@ Adding a new tab is one entry in `App.tsx`'s `TAB_DEFS` plus a component
 that takes `{ active, state }`. `active=true` is the signal to start any
 side-effects (polling, subscribing); on false, tear them down.
 
-## Setup
+## Run
+
+One command, fully self-bootstrapping:
 
 ```bash
-# Python side
-pip install -r requirements.txt
-python build_protos.py
+./scripts/run.sh                            # uses config/default.yaml
+./scripts/run.sh --device xbox              # override device
+./scripts/run.sh --host 192.168.1.50 --port 5005
+CONFIG=config/my_robot.yaml ./scripts/run.sh
+```
 
-# UI side — needs Node 20+. Build once; the steamdeck reads ui/dist/.
-./scripts/build_ui.sh
+`scripts/run.sh` is the only command you need. On first run it:
 
-# Or during development, hot-reload the UI against a live Python process:
-cd ui && npm install && npm run dev   # then open http://localhost:5173
+1. Creates a Python venv (`.venv/`) and installs `requirements.txt`.
+2. Compiles protobufs (whenever any `.proto` is newer than the build).
+3. Installs Node 20 LTS via [nvm](https://github.com/nvm-sh/nvm) if
+   `node`/`npm` aren't already on `$PATH` — per-user, no sudo, works on
+   Arch (Steam Deck), Ubuntu, Debian, Fedora.
+4. Runs `npm install` + `vite build` into `ui/dist/` (only when UI
+   sources are newer).
+5. Downloads the SDL controller-mapping DB.
+6. Kills any stale teleop process so the UI port is free.
+7. `exec`s `python -m capra_teleop_interface`.
 
-# Run the teleop process (UI served at http://127.0.0.1:8765/)
-./run_steamdeck.sh --host 192.168.2.2
+All extra flags are forwarded verbatim — see `python -m capra_teleop_interface --help`.
+
+### UI dev loop (hot reload)
+
+```bash
+cd ui && npm install && npm run dev    # http://localhost:5173
+```
+
+The Vite dev server proxies `/api/*`, `/state`, `/estop`, `/resume`,
+`/strategy` to the Python process at `:8765`, so the SPA hot-reloads
+against a live teleop instance.
+
+### Standalone scripts (rarely needed)
+
+`scripts/run.sh` does everything, but if you want to invoke pieces
+directly:
+
+```bash
+python scripts/build_protos.py     # just regenerate proto/*_pb2.py
+./scripts/build_ui.sh              # just rebuild the UI
+python scripts/validate_protos.py  # listen for RoveControl frames + validate
 ```
 
 ## Running

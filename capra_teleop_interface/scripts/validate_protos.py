@@ -19,18 +19,20 @@ import socket
 import sys
 import time
 
-# Support running this file directly from anywhere: put the package's
-# parent on sys.path so the generated _pb2 modules resolve.
+# Support running this file directly from anywhere. We now live in
+# scripts/, so the package root is one level up and its parent (where
+# ``capra_teleop_interface`` is importable from) is two levels up.
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_PARENT = os.path.dirname(_HERE)
-if _PARENT not in sys.path:
-    sys.path.insert(0, _PARENT)
+_PKG_ROOT = os.path.dirname(_HERE)
+_PKG_PARENT = os.path.dirname(_PKG_ROOT)
+if _PKG_PARENT not in sys.path:
+    sys.path.insert(0, _PKG_PARENT)
 # Expose ``proto.core`` as a top-level import path too, matching what the
 # generated files reference internally.
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
+if _PKG_ROOT not in sys.path:
+    sys.path.insert(0, _PKG_ROOT)
 
-from control_interface.proto.core import JointState_pb2, RoveControl_pb2
+from capra_teleop_interface.proto.core import JointState_pb2, RoveControl_pb2
 
 
 TRACK_MIN, TRACK_MAX = -1.0, 1.0

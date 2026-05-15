@@ -1,8 +1,9 @@
 """Compile the .proto files into Python modules.
 
-Run this once before launching the control interface:
+Run via the unified ``scripts/run.sh`` (which calls this for you), or
+directly:
 
-    python build_protos.py
+    python scripts/build_protos.py
 
 Re-run whenever the .proto files change. Output lands next to the .proto
 files as ``<n>_pb2.py``.
@@ -17,7 +18,8 @@ from pathlib import Path
 
 from grpc_tools import protoc
 
-PKG_ROOT = Path(__file__).resolve().parent
+# This script lives in scripts/, so the package root is one level up.
+PKG_ROOT = Path(__file__).resolve().parent.parent
 PROTO_DIR = PKG_ROOT / "proto" / "core"
 
 
