@@ -1,12 +1,14 @@
+from .arcade_drive import ArcadeDriveStrategy, BaseControlStrategy
+from .arcade_arm import ArcadeArmStrategy, ArmControlStrategy
 from .base import ControlStrategy
-from .tank_drive import BaseControlStrategy, TankDriveStrategy
-from .arcade_arm import ArmControlStrategy, ArcadeArmStrategy
+from .tank_drive import TankDriveStrategy
 
 __all__ = [
     "ControlStrategy",
-    "BaseControlStrategy",
+    "ArcadeDriveStrategy",
+    "TankDriveStrategy",
     "ArmControlStrategy",
     # Legacy aliases kept for external callers.
-    "TankDriveStrategy",
+    "BaseControlStrategy",
     "ArcadeArmStrategy",
 ]

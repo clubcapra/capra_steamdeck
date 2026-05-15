@@ -1,37 +1,26 @@
-"""Base control strategy: arcade drive + flipper control.
+"""Tank drive strategy: each joystick controls one track directly.
 
-Left joystick (arcade): Y = throttle, X = steer → track velocities.
-Back grip pads select which flipper; DPAD up/down steps it.
-With no grip held, DPAD moves all four flippers together.
+Left stick Y  → left track velocity  (up = forward)
+Right stick Y → right track velocity (up = forward)
 
-Grip → flipper:
-    L4 (top-left)     → front-left
-    R4 (top-right)    → front-right
-    L5 (bottom-left)  → rear-left
-    R5 (bottom-right) → rear-right
+Use this when you need fine independent control of each track — e.g.
+pivoting in place, climbing over obstacles where the tracks need to move
+at different speeds, or recovering from a stuck condition.
+
+Flippers and haptics follow the shared arcade/drive mapping.
 """
 from __future__ import annotations
 
 import time
 
-from ..controllers.input_model import Button, ControllerInput, HapticCommand
+from ..controllers.input_model import ControllerInput, HapticCommand
 from ..proto.core import RoveControl_pb2
+from .arcade_drive import apply_flippers, drive_haptics, shape_stick
 from .base import ControlStrategy
 
 
-STICK_DEADZONE = 0.08
-
-
-def _deadzone(value: float, dz: float = STICK_DEADZONE) -> float:
-    return 0.0 if abs(value) < dz else value
-
-
-def _clamp(v: float) -> float:
-    return max(-1.0, min(1.0, v))
-
-
-class BaseControlStrategy(ControlStrategy):
-    name = "base_control"
+class TankDriveStrategy(ControlStrategy):
+    name = "tank_drive"
 
     def __init__(self) -> None:
         self._last_update: float | None = None
@@ -46,43 +35,14 @@ class BaseControlStrategy(ControlStrategy):
         msg = RoveControl_pb2.RoveControl()
         msg.timestamp_us = int(now * 1_000_000)
 
-        # Arcade drive: left stick Y = throttle (up = +1 on Deck), X = steer.
-        throttle = _deadzone(inp.left_y)
-        steer = -_deadzone(inp.left_x)
-        msg.tracks.left_vel = _clamp(throttle + steer)
-        msg.tracks.right_vel = _clamp(throttle - steer)
+        # Each stick Y drives its own track. Expo shaping for fine control.
+        msg.tracks.left_vel = shape_stick(inp.left_y)
+        msg.tracks.right_vel = shape_stick(inp.right_y)
 
-        # Flippers: hold a back grip to select, DPAD up/down to step.
-        # No grip held = all four move together.
-        dpad_dir = (
-            1 if inp.is_pressed(Button.DPAD_UP)
-            else -1 if inp.is_pressed(Button.DPAD_DOWN)
-            else 0
-        )
-        l4 = inp.is_pressed(Button.L4)
-        r4 = inp.is_pressed(Button.R4)
-        l5 = inp.is_pressed(Button.L5)
-        r5 = inp.is_pressed(Button.R5)
-        none_selected = not (l4 or r4 or l5 or r5)
-        msg.flippers.fl = dpad_dir if (l4 or none_selected) else 0
-        msg.flippers.fr = dpad_dir if (r4 or none_selected) else 0
-        msg.flippers.rl = dpad_dir if (l5 or none_selected) else 0
-        msg.flippers.rr = dpad_dir if (r5 or none_selected) else 0
-
+        apply_flippers(inp, msg)
         return msg
 
     def compute_haptics(
         self, inp: ControllerInput, message: RoveControl_pb2.RoveControl
     ) -> HapticCommand | None:
-        speed = max(abs(message.tracks.left_vel), abs(message.tracks.right_vel))
-        if speed < 0.1:
-            return None
-        return HapticCommand(
-            low_frequency=speed * 0.4,
-            high_frequency=speed * 0.2,
-            duration_ms=80,
-        )
-
-
-# Alias so callers using the old class name still resolve.
-TankDriveStrategy = BaseControlStrategy
+        return drive_haptics(message)

@@ -8,7 +8,7 @@ port: 9101
 
 # ---------- Controller ----------
 device: "steamdeck"       # steamdeck | xbox
-strategy: "base_control"  # base_control | arm_control
+strategy: "arcade_drive"  # arcade_drive | tank_drive | arm_control
 rate: 100.0               # Hz — control loop rate (10ms max input→send latency)
 device_index: 0           # joystick index when multiple pads are connected
 stick_deadzone: 0.10      # raise if robot drifts at rest; lower for more precision

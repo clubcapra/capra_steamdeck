@@ -108,7 +108,10 @@ _INDEX_HTML = """<!doctype html>
 <h1>capra teleop &mdash; <span id="status">connecting&hellip;</span></h1>
 
 <div class="strategy-bar">
-  <button id="btn_base_control" class="strat-btn" onclick="switch_strategy('base_control')">
+  <button id="btn_arcade_drive" class="strat-btn" onclick="switch_strategy('arcade_drive')">
+    Arcade Drive
+  </button>
+  <button id="btn_tank_drive" class="strat-btn" onclick="switch_strategy('tank_drive')">
     Tank Drive
   </button>
   <button id="btn_arm_control" class="strat-btn" onclick="switch_strategy('arm_control')">
@@ -192,12 +195,12 @@ function set_active_strategy(name) {
   document.querySelectorAll('.strat-btn').forEach(b => b.classList.remove('active'));
   const btn = document.getElementById('btn_' + name);
   if (btn) btn.classList.add('active');
-  const is_base = (name === 'base_control');
+  const is_drive = (name === 'arcade_drive' || name === 'tank_drive');
   ['sec_drive', 'sec_drive_label'].forEach(id => {
-    document.getElementById(id).classList.toggle('dim', !is_base);
+    document.getElementById(id).classList.toggle('dim', !is_drive);
   });
   ['sec_arm', 'sec_arm_label'].forEach(id => {
-    document.getElementById(id).classList.toggle('dim', is_base);
+    document.getElementById(id).classList.toggle('dim', is_drive);
   });
 }
 
@@ -316,7 +319,7 @@ class TeleopState:
         self._sent: Optional[dict] = None
         self._sent_count = 0
         self._estopped = False
-        self._strategy_name = "base_control"
+        self._strategy_name = "arcade_drive"
 
     def set_strategy_name(self, name: str) -> None:
         with self._lock:

@@ -47,9 +47,10 @@ from .network import (
 )
 from .strategies import (
     ArcadeArmStrategy,
+    ArcadeDriveStrategy,
     ArmControlStrategy,
-    BaseControlStrategy,
     ControlStrategy,
+    TankDriveStrategy,
 )
 from .ui_server import CsvLogger, TeleopHttpServer, TeleopState, zero_rove_control
 
@@ -60,7 +61,8 @@ DEVICES = {
 }
 
 STRATEGIES = {
-    "base_control": BaseControlStrategy,
+    "arcade_drive": ArcadeDriveStrategy,
+    "tank_drive": TankDriveStrategy,
     "arm_control": ArmControlStrategy,
     "arcade_arm": ArcadeArmStrategy,
 }
@@ -89,8 +91,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--strategy",
         choices=STRATEGIES.keys(),
-        default="base_control",
-        help="Initial control strategy (default: base_control). Can be switched live via the UI.",
+        default="arcade_drive",
+        help="Initial control strategy (default: arcade_drive). Can be switched live via the UI.",
     )
     p.add_argument(
         "--rate", type=float, default=100.0, help="Control loop rate in Hz (default: 100)"
