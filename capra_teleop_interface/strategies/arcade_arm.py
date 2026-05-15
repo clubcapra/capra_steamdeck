@@ -57,8 +57,12 @@ class ArmControlStrategy(ControlStrategy):
         self._gripper_closed = False
         self._rb_was_pressed = False
 
-    def on_activate(self) -> None:
+    def on_activate(self, gripper_position: int = 0) -> None:
         self._last_update = None
+        # Seed from controller latch so a re-activation doesn't snap the
+        # gripper open after the operator left it closed.
+        self._gripper_closed = gripper_position >= 128
+        self._rb_was_pressed = False
 
     def build_message(self, inp: ControllerInput) -> RoveControl_pb2.RoveControl:
         now = time.monotonic()

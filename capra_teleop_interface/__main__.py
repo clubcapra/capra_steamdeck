@@ -40,6 +40,7 @@ from .controllers import (
 )
 from .network import (
     BindEndpoint,
+    StuckDetector,
     UdpEndpoint,
     UdpSender,
     UdpTelemetryReceiver,
@@ -52,7 +53,13 @@ from .strategies import (
     ControlStrategy,
     TankDriveStrategy,
 )
-from .ui_server import CsvLogger, TeleopHttpServer, TeleopState, zero_rove_control
+from .ui_server import (
+    CsvLogger,
+    SensorProxyPool,
+    TeleopHttpServer,
+    TeleopState,
+    zero_rove_control,
+)
 
 
 DEVICES = {
@@ -213,9 +220,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--api-base-url",
         default=None,
         help=(
-            "rove_sensor_api base URL used by the UI E-stop button "
+            "rove_sensor_api base URL used by the UI E-stop + Data tab "
             "(default: http://192.168.2.2:8080). Set to '' to disable the "
             "direct api call (zeroed outbound commands still happen)."
+        ),
+    )
+    p.add_argument(
+        "--ik-engine-url",
+        default=None,
+        help=(
+            "rove_ik_engine HTTP base URL for the Settings tab's collision "
+            "toggle (default: http://192.168.2.2:9101). Set to '' to hide "
+            "the IK controls in the UI."
         ),
     )
 
@@ -234,6 +250,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # Apply hard-coded defaults for values that weren't set by CLI or config.
     _FALLBACK_DEFAULTS: dict = {
         "api_base_url": "http://192.168.2.2:8080",
+        "ik_engine_url": "http://192.168.2.2:9101",
         "stick_deadzone": 0.10,
         "trigger_deadzone": 0.02,
     }
@@ -520,6 +537,27 @@ def main(argv: list[str] | None = None) -> int:
     # --- Observability: telemetry receiver, UI server, CSV logger ------
     state = TeleopState()
     state.set_strategy_name(args.strategy)
+    # Wire the UI's tab-selection gate into the controller's send loop.
+    # Commands are dropped unless the operator is on the Control tab.
+    # With --no-ui there's no UI to flip the gate, so leave it default-open.
+    if not args.no_ui:
+        controller.set_send_gate(state.is_control_active)
+
+    # Vectornav-driven stuck-detection haptic. Starts disabled if the
+    # operator turned it off in a previous session via the UI; otherwise
+    # subscribes to vectornav on rove_sensor_api and lights up the rumble
+    # motor when the operator commands tracks but the IMU sees neither
+    # translation nor rotation.
+    stuck_detector: StuckDetector | None = None
+    if args.api_base_url and not args.no_haptics:
+        stuck_detector = StuckDetector(
+            args.api_base_url,
+            get_commanded_tracks=state.latest_commanded_tracks,
+        )
+        if state.is_stuck_haptic_enabled():
+            stuck_detector.set_enabled(True)
+        # Plug into the controller so the haptic loop reads it each tick.
+        controller._stuck_detector = stuck_detector  # type: ignore[attr-defined]
     csv_logger: CsvLogger | None = None
     if not args.no_log:
         csv_logger = CsvLogger(args.log_dir)
@@ -552,6 +590,18 @@ def main(argv: list[str] | None = None) -> int:
 
     ui_server: TeleopHttpServer | None = None
     if not args.no_ui:
+        # Data tab subscribes to sensors via this pool (proxies UDP for the
+        # browser, which can't speak UDP itself).
+        sensor_pool = SensorProxyPool(args.api_base_url) if args.api_base_url else None
+        # Serve the built React UI from ui/dist/ next to this package.
+        _pkg_dir = Path(__file__).resolve().parent
+        ui_dist = _pkg_dir / "ui" / "dist"
+        if not ui_dist.is_dir():
+            logging.warning(
+                "ui/dist not found — build the UI with scripts/build_ui.sh "
+                "(or `cd ui && npm install && npm run build`). The HTTP API "
+                "still works, but / will 404."
+            )
         ui_server = TeleopHttpServer(
             state,
             receiver,
@@ -559,6 +609,12 @@ def main(argv: list[str] | None = None) -> int:
             port=args.ui_port,
             api_base_url=args.api_base_url,
             strategy_switcher=_switch_strategy,
+            ui_dir=ui_dist if ui_dist.is_dir() else None,
+            ik_engine_url=args.ik_engine_url or "",
+            sensor_pool=sensor_pool,
+            stuck_haptic_setter=(
+                stuck_detector.set_enabled if stuck_detector is not None else None
+            ),
         )
         ui_server.start()
 
@@ -589,6 +645,11 @@ def main(argv: list[str] | None = None) -> int:
         if csv_logger is not None:
             try:
                 csv_logger.close()
+            except Exception:
+                pass
+        if stuck_detector is not None:
+            try:
+                stuck_detector.stop()
             except Exception:
                 pass
     return 0

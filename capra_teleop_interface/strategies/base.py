@@ -40,8 +40,14 @@ class ControlStrategy(ABC):
         """
         return None
 
-    def on_activate(self) -> None:
-        """Hook called when this strategy becomes active. Default: no-op."""
+    def on_activate(self, gripper_position: int = 0) -> None:
+        """Hook called when this strategy becomes active. Default: no-op.
+
+        ``gripper_position`` is the controller's latched gripper value at
+        the moment of activation. Strategies that manage the gripper should
+        seed their internal open/closed state from this so switching modes
+        never snaps the gripper. Non-managing strategies can ignore it.
+        """
 
     def on_deactivate(self) -> None:
         """Hook called when this strategy is swapped out. Default: no-op."""

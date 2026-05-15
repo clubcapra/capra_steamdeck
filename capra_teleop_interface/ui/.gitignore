@@ -1,0 +1,5 @@
+node_modules/
+# dist/ is intentionally NOT ignored — the steamdeck consumes the built
+# bundle directly, so we commit it. Rebuild via scripts/build_ui.sh.
+*.tsbuildinfo
+.vite/

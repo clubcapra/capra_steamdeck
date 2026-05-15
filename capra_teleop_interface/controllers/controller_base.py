@@ -20,8 +20,11 @@ import time
 from abc import ABC, abstractmethod
 from typing import Optional
 
+from typing import Callable
+
 from .input_model import Button, ControllerInput
 from ..haptics.base import HapticFeedback, NullHaptic
+from ..network.stuck_detector import StuckDetector
 from ..network.udp_receiver import UdpTorqueReceiver
 from ..network.udp_sender import UdpSender
 from ..strategies.base import ControlStrategy
@@ -55,6 +58,8 @@ class ControllerBase(ABC):
         torque_receiver: Optional[UdpTorqueReceiver] = None,
         stick_deadzone: float = 0.05,
         trigger_deadzone: float = 0.02,
+        is_send_allowed: "Callable[[], bool] | None" = None,
+        stuck_detector: "Optional[StuckDetector]" = None,
     ) -> None:
         self._sender = sender
         self._strategy = strategy
@@ -63,10 +68,15 @@ class ControllerBase(ABC):
         self._haptics_enabled = haptics_enabled
         self._haptic: HapticFeedback = NullHaptic()
         self._torque_receiver = torque_receiver
+        self._stuck_detector = stuck_detector
         self._stop = False
         self._stick_deadzone = stick_deadzone
         self._trigger_deadzone = trigger_deadzone
         self._gripper_latch: int = 0  # persists across strategy switches
+        # Send gate: the UI's Control tab flips this true; everywhere else
+        # in the UI the operator is in Settings/Data and we must not move
+        # the robot. If unset (CLI without UI), default-open.
+        self._is_send_allowed = is_send_allowed or (lambda: True)
 
     # ---- Template method ----------------------------------------------------
 
@@ -76,7 +86,7 @@ class ControllerBase(ABC):
         self._haptic = self._create_haptic() if self._haptics_enabled else NullHaptic()
         if self._torque_receiver is not None and self._haptics_enabled:
             self._torque_receiver.start()
-        self._strategy.on_activate()
+        self._strategy.on_activate(gripper_position=self._gripper_latch)
 
         log.info(
             "Controller loop started: device=%s, strategy=%s, rate=%.1fHz, target=%s:%d",
@@ -114,18 +124,30 @@ class ControllerBase(ABC):
 
                 # Push-based control: the robot stops when packets stop
                 # arriving, so suppress frames where nothing is commanded
-                # rather than spam empty telemetry.
-                if not inp.is_idle(self._stick_deadzone, self._trigger_deadzone):
+                # rather than spam empty telemetry. The send gate is what
+                # the UI's tab selection drives — when the operator is on
+                # Settings/Data, _is_send_allowed returns False and the
+                # frame is dropped here (still built so strategy state
+                # stays coherent for when the gate reopens).
+                if (
+                    not inp.is_idle(self._stick_deadzone, self._trigger_deadzone)
+                    and self._is_send_allowed()
+                ):
                     self._sender.send(msg)
 
-                # Haptics always tick — torque feedback is about what the
-                # robot is doing, not what the operator is pressing.
-                if self._torque_receiver is not None:
-                    self._haptic.rumble(self._torque_receiver.as_haptic_command())
-                else:
+                # Haptic priority: stuck-detection wins over torque rumble
+                # because being stuck is the most actionable signal for the
+                # operator. Falls back to torque-receiver or strategy haptic
+                # in that order.
+                haptic_cmd = None
+                if self._stuck_detector is not None:
+                    haptic_cmd = self._stuck_detector.as_haptic_command()
+                if haptic_cmd is None and self._torque_receiver is not None:
+                    haptic_cmd = self._torque_receiver.as_haptic_command()
+                if haptic_cmd is None:
                     haptic_cmd = self._strategy.compute_haptics(inp, msg)
-                    if haptic_cmd is not None:
-                        self._haptic.rumble(haptic_cmd)
+                if haptic_cmd is not None:
+                    self._haptic.rumble(haptic_cmd)
 
                 # Rate pacing with drift correction.
                 next_tick += self._period
@@ -153,12 +175,21 @@ class ControllerBase(ABC):
         """Signal the polling loop to exit at the next iteration."""
         self._stop = True
 
+    def set_send_gate(self, fn: Callable[[], bool]) -> None:
+        """Plug in a predicate the send loop calls before each send.
+
+        Used by the UI's Control-tab gate: when the operator is on Settings
+        or Data, ``fn()`` returns False and commands stay local. Pass
+        ``lambda: True`` to disable gating.
+        """
+        self._is_send_allowed = fn
+
     def set_strategy(self, strategy: ControlStrategy) -> None:
         """Hot-swap the active strategy."""
         log.info("Switching strategy: %s -> %s", self._strategy.name, strategy.name)
         self._strategy.on_deactivate()
         self._strategy = strategy
-        self._strategy.on_activate()
+        self._strategy.on_activate(gripper_position=self._gripper_latch)
 
     @property
     def strategy(self) -> ControlStrategy:

@@ -28,7 +28,8 @@ telemetry_listen_port: 7001
 # no_ui: false
 ui_host: "127.0.0.1"
 ui_port: 8765
-api_base_url: "http://192.168.2.2:8080"  # rove_sensor_api for E-stop
+api_base_url: "http://192.168.2.2:8080"  # rove_sensor_api: E-stop + Data tab sensor proxy
+ik_engine_url: "http://192.168.2.2:9101"  # rove_ik_engine: Settings tab collision toggle
 
 # ---------- Logging ----------
 log_dir: "logs"

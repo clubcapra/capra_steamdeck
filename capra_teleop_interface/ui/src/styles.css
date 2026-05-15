@@ -1,0 +1,74 @@
+/* Layout shell — Blueprint styles handle widgets; this file only owns the
+   page chrome (banner, tab-bar, grid). Keep additions terse. */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app__header {
+  padding: 0.6em 1em;
+  border-bottom: 1px solid #2a2f36;
+  display: flex;
+  align-items: center;
+  gap: 1em;
+}
+
+.app__title { font-weight: 700; letter-spacing: 0.04em; }
+
+.app__status { margin-left: auto; font-size: 0.85em; }
+.app__status.good { color: #7fe09a; }
+.app__status.bad  { color: #ff7070; }
+
+.app__banner-estop {
+  background: #9c1414;
+  color: #fff;
+  font-weight: 700;
+  text-align: center;
+  padding: 0.55em 1em;
+  letter-spacing: 0.07em;
+  border-bottom: 2px solid #5a1010;
+}
+
+.app__tabs {
+  border-bottom: 1px solid #2a2f36;
+  padding: 0 1em;
+}
+
+.app__content {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 1em;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1em;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.3em 0;
+  border-bottom: 1px solid #252b30;
+}
+.row .label { color: #a7b6c2; }
+.row .value { font-variant-numeric: tabular-nums; }
+
+.sec-label { font-weight: 700; margin-top: 0.8em; margin-bottom: 0.3em; color: #c5cbd3; }
+.dim { opacity: 0.4; }
+
+.estop-bar { display: flex; justify-content: center; padding: 0.6em; gap: 0.5em; }
+
+.joint-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.5em;
+  margin-top: 0.5em;
+}
+.joint-card { background: #252b30; padding: 0.5em; border-radius: 4px; }
+.joint-card .name { font-weight: 600; }
+.joint-card .v { font-variant-numeric: tabular-nums; }
+.joint-card .small { font-size: 0.8em; color: #a7b6c2; }

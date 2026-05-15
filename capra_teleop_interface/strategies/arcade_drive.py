@@ -85,7 +85,7 @@ class ArcadeDriveStrategy(ControlStrategy):
     def __init__(self) -> None:
         self._last_update: float | None = None
 
-    def on_activate(self) -> None:
+    def on_activate(self, gripper_position: int = 0) -> None:
         self._last_update = None
 
     def build_message(self, inp: ControllerInput) -> RoveControl_pb2.RoveControl:
