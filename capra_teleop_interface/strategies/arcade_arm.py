@@ -1,7 +1,7 @@
 """Arm control strategy: 6-DOF Ovis arm as Cartesian twist.
 
 Layout:
-    Right stick X / Y:   arm position X / Y  (Y inverted: up = +Y)
+    Right stick X / Y:   arm position X / Y  (up = -Y, raw passthrough)
     Left stick X:        arm orientation yaw  (twist left/right)
     Left stick Y:        arm orientation pitch  (up = +pitch)
     DPAD left / right:   arm orientation roll
@@ -71,9 +71,9 @@ class ArmControlStrategy(ControlStrategy):
         msg.tracks.left_vel = 0.0
         msg.tracks.right_vel = 0.0
 
-        # Arm position: right stick XY (Y inverted); Z not mapped in this schema.
+        # Arm position: right stick XY; Z not mapped in this schema.
         msg.ovis.position.x = _ovis_axis(inp.right_x)
-        msg.ovis.position.y = _ovis_axis(-inp.right_y)
+        msg.ovis.position.y = _ovis_axis(inp.right_y)
         msg.ovis.position.z = 0.0
 
         # Arm orientation: left stick X=yaw, Y=pitch (inverted); DPAD=roll.
