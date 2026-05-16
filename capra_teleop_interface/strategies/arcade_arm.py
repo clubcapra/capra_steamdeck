@@ -66,8 +66,16 @@ class ArmControlStrategy(ControlStrategy):
         self._gripper_closed = False
         self._rb_was_pressed = False
 
-    def on_activate(self) -> None:
+    def on_activate(self, gripper_position: int = 0) -> None:
+        # Signature mirrors the base class — ControllerBase passes the
+        # latched gripper value as a keyword arg, so refusing it raises
+        # TypeError inside set_strategy(), which swallows the swap, which
+        # makes the UI's strategy buttons look frozen on whatever was
+        # selected last. Seed from the latch so re-activating arm mode
+        # doesn't snap the gripper open after the operator left it closed.
         self._last_update = None
+        self._gripper_closed = gripper_position >= 128
+        self._rb_was_pressed = False
 
     def build_message(self, inp: ControllerInput) -> RoveControl_pb2.RoveControl:
         now = time.monotonic()
