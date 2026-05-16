@@ -20,11 +20,17 @@ import time
 
 from ..controllers.input_model import Button, ControllerInput, HapticCommand
 from ..proto.core import RoveControl_pb2
-from .arcade_drive import shape_stick
+from .arcade_drive import STICK_DEADZONE, _scaled_dz
 from .base import ControlStrategy
 
+# Expo exponent for arm sticks. Higher → flatter near centre, more
+# precise small motions, sharper rise near full deflection. The tracks
+# use 2.0; the arm wants more precision because the IK solver amplifies
+# small input errors into visible end-effector drift.
+OVIS_EXPO = 2.5
+
 # Full-stick output cap — avoids saturating the IK velocity envelope.
-# After ``shape_stick`` produces a value in [-1, 1], this scales it down
+# After expo shaping produces a value in [-1, 1], this scales it down
 # so the integrator never asks the solver for a step it can't take.
 OVIS_AXIS_LIMIT = 0.6
 
@@ -33,9 +39,22 @@ def _clamp(v: float) -> float:
     return max(-1.0, min(1.0, v))
 
 
+def _expo(value: float, exponent: float = OVIS_EXPO) -> float:
+    """Symmetric ``|x|^exponent`` with sign preserved. Output in [-1, 1]."""
+    if value == 0.0:
+        return 0.0
+    sign = 1.0 if value >= 0 else -1.0
+    return sign * (abs(value) ** exponent)
+
+
 def _ovis_axis(raw: float) -> float:
-    """Deadzone + symmetric expo (same curve as the tracks) + IK saturation cap."""
-    return _clamp(shape_stick(raw) * OVIS_AXIS_LIMIT)
+    """Deadzone + arm-tuned expo + IK saturation cap.
+
+    Re-uses ``_scaled_dz`` from the tracks module so the deadzone
+    threshold stays in one place. The expo exponent is local — tracks
+    and arm have different ergonomics and shouldn't co-tune.
+    """
+    return _clamp(_expo(_scaled_dz(raw, STICK_DEADZONE)) * OVIS_AXIS_LIMIT)
 
 
 class ArmControlStrategy(ControlStrategy):
