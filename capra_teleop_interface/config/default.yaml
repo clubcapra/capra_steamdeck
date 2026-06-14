@@ -3,8 +3,10 @@
 # CLI flags always override values set here.
 
 # ---------- Rover connection ----------
-host: "192.168.2.2"
-port: 9101
+host: "192.168.2.2"   # rove_control_bridge host
+port: 5005            # rove_control_bridge teleop_port (RoveControl over UDP).
+                      # NOT 9101 — that's the IK engine's WebSocket port; the bridge
+                      # is the front door for RoveControl and fans out to the engine.
 
 # ---------- Controller ----------
 device: "steamdeck"       # steamdeck | xbox
