@@ -4,9 +4,10 @@
 
 # ---------- Rover connection ----------
 host: "192.168.2.2"   # rove_control_bridge host
-port: 5005            # rove_control_bridge teleop_port (RoveControl over UDP).
-                      # NOT 9101 — that's the IK engine's WebSocket port; the bridge
-                      # is the front door for RoveControl and fans out to the engine.
+port: 5050            # rove_control_bridge teleop_port (RoveControl over UDP).
+                      # Must match the bridge's [comms].teleop_port. NOT 5005 —
+                      # that's rove_sensor_api's gripper command port. NOT 9101 —
+                      # that's the IK engine's WebSocket port.
 
 # ---------- Controller ----------
 device: "steamdeck"       # steamdeck | xbox

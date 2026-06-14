@@ -1,8 +1,9 @@
 """CLI entry point: pick a controller, pick a strategy, start streaming.
 
 Usage:
-    python3 -m capra_teleop_interface --host 192.168.1.50 --port 5005 \
-        --device steamdeck --strategy arcade
+    python3 -m capra_teleop_interface --host 192.168.2.2 --port 5050 \
+        --device steamdeck --strategy arcade_drive
+    # --port must match the rove_control_bridge [comms].teleop_port (5050).
 
 Run from the *parent* of ``capra_teleop_interface/`` (so Python can find
 the package on sys.path). The ``__package__`` fixup below also lets

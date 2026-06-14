@@ -2,7 +2,7 @@
 # Single self-bootstrapping launcher for the operator teleop process.
 #
 #   ./scripts/run.sh                                # default config + device
-#   ./scripts/run.sh --host 192.168.1.50 --port 5005
+#   ./scripts/run.sh --host 192.168.2.2 --port 5050   # 5050 = bridge teleop_port
 #   ./scripts/run.sh --device xbox                  # override the YAML device
 #   CONFIG=config/my_robot.yaml ./scripts/run.sh    # alternate config file
 #

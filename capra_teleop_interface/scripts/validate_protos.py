@@ -5,11 +5,14 @@ and prints a one-line summary per frame plus any range-violation warnings.
 On exit (Ctrl-C), prints the aggregate counts.
 
 Usage:
-    python validate_protos.py --port 5005
-    python validate_protos.py --port 5005 --send-test    # also sends a canary
+    python validate_protos.py --port 5050
+    python validate_protos.py --port 5050 --send-test    # also sends a canary
 
 Point the interface at your local machine while testing:
-    python -m control_interface --host 127.0.0.1 --port 5005 ...
+    python -m control_interface --host 127.0.0.1 --port 5050 ...
+
+(5050 = the rove_control_bridge teleop_port. NOT 5005 — that's
+rove_sensor_api's gripper command port.)
 """
 from __future__ import annotations
 
@@ -43,7 +46,7 @@ ARM_POS_LIMIT_DEG = 720.0
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Validate incoming RoveControl UDP frames")
     p.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
-    p.add_argument("--port", type=int, default=5005, help="UDP port (default: 5005)")
+    p.add_argument("--port", type=int, default=5050, help="UDP port (default: 5050, the bridge teleop_port)")
     p.add_argument(
         "--send-test",
         action="store_true",
